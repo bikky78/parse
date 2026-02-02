@@ -17,7 +17,7 @@ const {
   LeaveAccrual,
   EmployeeExitDetails,
 } = require("./db");
-const { sendTemplatedEmail } = require("./util");
+const { sendTemplatedEmail } = require("./email.js");
 const app = express();
 //const upload = multer({ dest: "uploads/" });
 const upload = multer({ storage: multer.memoryStorage() });
