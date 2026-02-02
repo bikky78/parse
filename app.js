@@ -17,7 +17,7 @@ const {
   LeaveAccrual,
   EmployeeExitDetails,
 } = require("./db");
-const { sendTemplatedEmail } = require("./email.js");
+const { sendTemplatedEmail, sendRawEmail } = require("./email.js");
 const app = express();
 //const upload = multer({ dest: "uploads/" });
 const upload = multer({ storage: multer.memoryStorage() });
@@ -956,6 +956,32 @@ app.post("/bulk_exit", upload.single("file"), async (req, res) => {
   } catch (err) {
     console.error("Error while processing bulk exit:", err);
     throw new Error(`Error while processing bulk exit: ${err}`);
+  }
+});
+
+app.post("/send-raw-email", upload.single("file"), async (req, res) => {
+  try {
+    await sendRawEmail({
+      to: ["bikky.kumar@buzzworks.com"],
+      cc: ["bikky.kumar@buzzworks.com"],
+      replyTo: ["bikky.kumar@buzzworks.com"],
+      subject: "Welcome to Veytan",
+      htmlBody: `
+    <h2>Hello Bikky</h2>
+    <p>Your account has been created successfully.</p>
+  `,
+      attachments: [
+        {
+          path: "./AboliBallal_CV.pdf",
+          mimeType: "application/pdf",
+        },
+      ],
+    });
+    res.json({
+      message: "Email Sent",
+    });
+  } catch (err) {
+    throw new Error(`Error while Sending Email: ${err}`);
   }
 });
 
