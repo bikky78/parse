@@ -95,7 +95,7 @@ app.post("/create_user_excel", upload.single("file"), async (req, res) => {
     rows.map((row) => {
       let email = row["email"];
       let exists = userData.find(
-        (da) => da.email.toLowerCase() === email.toLowerCase()
+        (da) => da.email.toLowerCase() === email.toLowerCase(),
       );
       let bulkexists = bulkCreate.find((d) => d.email === email);
       if (!exists && !bulkexists) {
@@ -165,44 +165,268 @@ app.post("/create_user_excel", upload.single("file"), async (req, res) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-app.post("/invite-user", async (req, res) => {
+app.post("/invite-user", upload.single("file"), async (req, res) => {
+  const emailNotSend = [];
+  const successEmails = [];
+  const skippedEmails = [];
+
   try {
-    let data = await User.findAll({
-      where: {
-        id: {
-          [Op.in]: [
-            176869, 176877, 176879, 176883, 177557, 186420, 190306, 170389,
-            196602, 197086, 197408, 172016, 171147, 179987, 194305, 194640,
-            196604, 199268, 326961, 183354, 201432, 201701, 327261, 327294,
-            327444, 339801, 339804, 339805, 340262, 339897, 339875, 338657,
-            341580,
-          ],
-        },
-      },
-    });
-
-    for (const da of data) {
-      let template = "SignUpTemplate";
-      let encodedEmail = Buffer.from(da.email).toString("base64");
-
-      let sendData = {
-        candidate_name: da.name,
-        login_link: "https://hcm.veytan.com/signin-new?", //"https://q.me-qr.com/pVIxCeN3",
-        company_name: "Imagimake",
-      };
-
-      await sendTemplatedEmail(da.email, template, sendData);
-      await sleep(50);
+    // 1. Validate file exists
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({
+        error: "No file uploaded",
+        message: "Please upload an Excel file",
+      });
     }
 
-    res.json({
-      message: "Users invited successfully",
-    });
+    // 2. Validate file type (optional but recommended)
+    const allowedTypes = [
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
+    ];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        error: "Invalid file type",
+        message: "Please upload a valid Excel file (.xlsx, .xls)",
+      });
+    }
+
+    // 3. Parse Excel file
+    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+
+    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+      return res.status(400).json({
+        error: "Invalid Excel file",
+        message: "The Excel file does not contain any sheets",
+      });
+    }
+
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(sheet);
+
+    // 4. Validate rows and email column
+    if (rows.length === 0) {
+      return res.status(400).json({
+        error: "Empty file",
+        message: "The Excel file does not contain any data",
+      });
+    }
+
+    // Check if Email column exists
+    const firstRow = rows[0];
+    if (!firstRow.hasOwnProperty("Email")) {
+      return res.status(400).json({
+        error: "Missing column",
+        message: "The Excel file must contain an 'Email' column",
+      });
+    }
+
+    // 5. Extract and validate emails
+    const emailSet = new Set();
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNumber = i + 2; // +2 because Excel is 1-indexed and header is row 1
+
+      // Check if Email field exists and is valid
+      if (!row["Email"] || typeof row["Email"] !== "string") {
+        emailNotSend.push({
+          email: `Row ${rowNumber}: ${row["Email"] || "No email"}`,
+          reason: "Invalid or missing email value",
+        });
+        continue;
+      }
+
+      let email = row["Email"].trim();
+
+      // Skip empty emails
+      if (!email) {
+        emailNotSend.push({
+          email: `Row ${rowNumber}: Empty`,
+          reason: "Empty email address",
+        });
+        continue;
+      }
+
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        emailNotSend.push({
+          email: `Row ${rowNumber}: ${email}`,
+          reason: "Invalid email format",
+        });
+        continue;
+      }
+
+      // Check for duplicates in the file
+      if (emailSet.has(email.toLowerCase())) {
+        skippedEmails.push({
+          email: email,
+          reason: "Duplicate email in file",
+          row: rowNumber,
+        });
+        continue;
+      }
+
+      emailSet.add(email.toLowerCase());
+
+      // 6. Find user in database
+      let userData;
+      try {
+        userData = await User.findOne({
+          where: {
+            email: {
+              [Op.iLike]: email,
+            },
+          },
+        });
+      } catch (dbError) {
+        console.error(`Database error for email ${email}:`, dbError);
+        emailNotSend.push({
+          email: email,
+          reason: "Database error",
+        });
+        continue;
+      }
+
+      if (!userData) {
+        emailNotSend.push({
+          email: email,
+          reason: "User not found in database",
+        });
+        continue;
+      }
+
+      // 7. Send invitation email
+      try {
+        let template = "SignUpTemplate";
+        let sendData = {
+          candidate_name: userData.name || "User",
+          login_link: "https://hcm.veytan.com/signin-new?",
+          company_name: "MUTHOOT HOME LOAN",
+        };
+
+        // Add timeout for email sending
+        await Promise.race([
+          sendTemplatedEmail(
+            userData.email,
+            template,
+            sendData,
+            ["hema@buzzworks.com"],
+            ["hema@buzzworks.com"],
+          ),
+          new Promise(
+            (_, reject) =>
+              setTimeout(
+                () => reject(new Error("Email sending timeout")),
+                30000,
+              ), // 30-second timeout
+          ),
+        ]);
+
+        successEmails.push(email);
+
+        // Optional: Rate limiting delay
+        if (rows.length > 10) {
+          await sleep(50);
+        }
+      } catch (emailError) {
+        console.error(`Failed to send email to ${email}:`, emailError);
+        emailNotSend.push({
+          email: email,
+          reason: `Email sending failed: ${emailError.message}`,
+        });
+      }
+    }
+
+    // 8. Prepare response
+    const response = {
+      message: "Invitation process completed",
+      summary: {
+        totalRows: rows.length,
+        uniqueEmailsProcessed: emailSet.size,
+        invitationsSent: successEmails.length,
+        failedToSend: emailNotSend.length,
+        skippedDuplicates: skippedEmails.length,
+      },
+      details: {
+        successfulEmails: successEmails,
+        failedEmails: emailNotSend,
+        skippedEmails: skippedEmails,
+      },
+    };
+
+    // 9. Log the result (optional)
+    console.log(
+      `Invitation process completed: ${successEmails.length} sent, ${emailNotSend.length} failed`,
+    );
+
+    res.json(response);
   } catch (err) {
     console.error("Upload error:", err);
-    res.status(500).json({ error: "Something went wrong" });
+
+    // Provide more specific error messages
+    let errorMessage = "Something went wrong";
+    let statusCode = 500;
+
+    if (err instanceof xlsx.error) {
+      errorMessage = "Invalid Excel file format";
+      statusCode = 400;
+    } else if (err.code === "LIMIT_FILE_SIZE") {
+      errorMessage = "File too large. Maximum size is 5MB";
+      statusCode = 400;
+    }
+
+    res.status(statusCode).json({
+      error: errorMessage,
+      details: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
   }
 });
+
+// app.post("/invite-user", async (req, res) => {
+//   let email = "sudharanie@bbspl.in";
+//   let userData;
+//   try {
+//     userData = await User.findOne({
+//       where: {
+//         email: {
+//           [Op.iLike]: email,
+//         },
+//       },
+//     });
+//   } catch (dbError) {
+//     console.error(`Database error for email ${email}:`, dbError);
+//   }
+
+//   // 7. Send invitation email
+//   try {
+//     let template = "SignUpTemplate";
+//     let sendData = {
+//       candidate_name: userData.name || "User",
+//       login_link: "https://hcm.veytan.com/signin-new?",
+//       company_name: "RBL BANK LIMITED",
+//     };
+
+//     // Add timeout for email sending
+//     await Promise.race([
+//       sendTemplatedEmail(
+//         userData.email,
+//         template,
+//         sendData,
+//         ["hema@buzzworks.com"],
+//         ["hema@buzzworks.com"],
+//       ),
+//       new Promise((_, reject) =>
+//         setTimeout(() => reject(new Error("Email sending timeout")), 30000),
+//       ),
+//     ]);
+//     res.status(200).json({ message: "Invitation Send Successfully" });
+//   } catch (emailError) {
+//     console.error(`Failed to send email to ${email}:`, emailError);
+//   }
+// });
 
 app.post("/upload-documents", upload.single("file"), async (req, res) => {
   try {
@@ -222,7 +446,7 @@ app.post("/upload-documents", upload.single("file"), async (req, res) => {
     for (const da of pfData) {
       await PFProfile.update(
         { esic_documents: da.esic_documents },
-        { where: { candidate_id: da.candidate_id } }
+        { where: { candidate_id: da.candidate_id } },
       );
     }
     // await Promise.all(
@@ -367,7 +591,7 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
     const sheet = workbook.Sheets[sheetName];
     const rows = xlsx.utils.sheet_to_json(sheet);
     const employeeCodes = rows.map((row) =>
-      row["employee_code"].toString().trim()
+      row["employee_code"].toString().trim(),
     );
     const employees = await Employee.findAll({
       where: {
@@ -471,13 +695,13 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
               (config.all_entities ||
                 (config.legal_entity_id === emp.legal_entity_id &&
                   (!config.sub_entity_id ||
-                    config.sub_entity_id === emp.sub_entity_id)))
+                    config.sub_entity_id === emp.sub_entity_id))),
           );
           return entityMatch;
         });
 
         const alreadyAssignedTasks = new Set(
-          taskMap.get(emp.candidate_id) || []
+          taskMap.get(emp.candidate_id) || [],
         );
 
         let newTasksToAssign = tasksToAssign.filter((t) => t.id === 241);
@@ -634,7 +858,7 @@ app.post("/leave_accrual", async (req, res) => {
           },
         ];
         await LeaveAccrual.bulkCreate(bulk);
-      })
+      }),
     );
 
     res.json({
@@ -652,7 +876,13 @@ app.post("/bulk_exit", upload.single("file"), async (req, res) => {
       where: {
         corporation_id: 36,
       },
-      attributes: ["employee_id", "employee_code","candidate_id",'legal_entity_id','corporation_id'],
+      attributes: [
+        "employee_id",
+        "employee_code",
+        "candidate_id",
+        "legal_entity_id",
+        "corporation_id",
+      ],
     });
 
     const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
@@ -661,15 +891,15 @@ app.post("/bulk_exit", upload.single("file"), async (req, res) => {
     const rowData = xlsx.utils.sheet_to_json(sheet);
 
     let bulkCreate = [];
-    const baseUrl = 'https://apis.veytan.com/prod'
+    const baseUrl = "https://apis.veytan.com/prod";
     for (let row in rowData) {
       let employee_code = row["employee_code"];
       let exists = employeeData.find(
-        (da) => da.employee_code === employee_code.toString().trim()
+        (da) => da.employee_code === employee_code.toString().trim(),
       );
       const last_working_date = new Date(row["last_working_day"]);
       const exit_initiated_date = new Date(row["exit_initiated_day"]);
-      const formatted = last_working_date.toISOString().split('T')[0];
+      const formatted = last_working_date.toISOString().split("T")[0];
       if (exists) {
         bulkCreate.push({
           mode_of_exit: "EXIT_RESIGNATION",
@@ -686,35 +916,38 @@ app.post("/bulk_exit", upload.single("file"), async (req, res) => {
           exit_initiated_date: exit_initiated_date,
         });
       }
-      await Employee.update({
-        status: 'Inactive'
-      },{
-        where:{
-          employee_code: employee_code
-        }
-      }),
-      await User.update({
-        is_active: false
-      },{
-        where:{
-          candidate_id: exists.candidate_id
-        }
-      })
-
-      await axios.post(
-        `${baseUrl}/api/payroll/inputs/exits/create`,
+      (await Employee.update(
         {
-          employees: [
-            {
-              client_id: 0,
-              le_id: exists.legal_entity_id,
-              emp_id: exists.employee_id,
-              org_id: exists.corporation_id,
-              dol: formatted,
-            },
-          ],
+          status: "Inactive",
         },
-      );
+        {
+          where: {
+            employee_code: employee_code,
+          },
+        },
+      ),
+        await User.update(
+          {
+            is_active: false,
+          },
+          {
+            where: {
+              candidate_id: exists.candidate_id,
+            },
+          },
+        ));
+
+      await axios.post(`${baseUrl}/api/payroll/inputs/exits/create`, {
+        employees: [
+          {
+            client_id: 0,
+            le_id: exists.legal_entity_id,
+            emp_id: exists.employee_id,
+            org_id: exists.corporation_id,
+            dol: formatted,
+          },
+        ],
+      });
     }
     await EmployeeExitDetails.bulkCreate(bulkCreate);
     res.json({

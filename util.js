@@ -7,34 +7,37 @@ dotenv.config();
 export async function sendTemplatedEmail(
   recipientEmail,
   templateName,
-  templateData
+  templateData,
+  ccEmails = [], // optional
+  replyToEmails = [], // optional
 ) {
   const params = {
     Source: "apps@veytan.com",
+
     Destination: {
       ToAddresses: Array.isArray(recipientEmail)
         ? recipientEmail
         : [recipientEmail],
+
+      CcAddresses: Array.isArray(ccEmails) ? ccEmails : [ccEmails],
     },
+
+    ReplyToAddresses: Array.isArray(replyToEmails)
+      ? replyToEmails
+      : [replyToEmails],
 
     Template: templateName,
     TemplateData: JSON.stringify(templateData),
   };
+
   try {
     const client = new SESClient({ region: "ap-south-1" });
-
     const command = new SendTemplatedEmailCommand(params);
     const result = await client.send(command);
 
-    console.log(
-      `Email sent successfully to ${recipientEmail}. SES response:`,
-      result
-    );
+    console.log(`Email sent successfully to ${recipientEmail}`, result);
   } catch (error) {
-    console.error(
-      `Failed to send templated email to ${recipientEmail}:`,
-      error
-    );
+    console.error(`Failed to send email to ${recipientEmail}`, error);
     throw error;
   }
 }
@@ -47,7 +50,11 @@ AWS.config.update({
 
 export const s3 = new AWS.S3();
 
-export const uploadToS3 = async (buffer, key, contentType = "application/pdf") => {
+export const uploadToS3 = async (
+  buffer,
+  key,
+  contentType = "application/pdf",
+) => {
   const params = {
     Bucket: process.env.S3_BUCKET,
     Key: key,
