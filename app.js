@@ -68,7 +68,7 @@ async function checkUserExistsByEmail(email) {
     const response = await client.send(command);
 
     if (response.Users && response.Users.length > 0) {
-      console.log("✅ User found:", response.Users[0].Username);
+      console.log("User found:", response.Users[0].Username);
       return true;
     }
 
@@ -92,66 +92,77 @@ app.post("/create_user_excel", upload.single("file"), async (req, res) => {
     const rows = xlsx.utils.sheet_to_json(sheet);
 
     let bulkCreate = [];
-    rows.map((row) => {
+    const skipCognitoEmails = new Set();
+
+    for (const row of rows) {
       let email = row["email"];
-      let exists = userData.find(
+      let existsInDB = userData.find(
         (da) => da.email.toLowerCase() === email.toLowerCase(),
       );
       let bulkexists = bulkCreate.find((d) => d.email === email);
-      if (!exists && !bulkexists) {
-        bulkCreate.push({
-          name: row["name"],
-          email: row["email"],
-          mobile_number: `+91${row["Contact Number"]}`,
-          designation: "RM",
-          role_id: [],
-          corporation_id: 3,
-          is_active: false,
-          is_first_time_login: true,
-          is_external: true,
-        });
-      } else {
-        console.log(`duplicate email:${email}`);
+
+      const existsInCognito = await checkUserExistsByEmail(email);
+      if (existsInCognito) {
+        skipCognitoEmails.add(email.toLowerCase());
       }
-    });
 
-    await User.bulkCreate(bulkCreate);
+      if (existsInDB || bulkexists) {
+        console.log(`duplicate email:${email}`);
+        continue;
+      }
 
-    // const createParams = {
-    //   UserPoolId: this.UserPoolId,
-    //   Username: email,
-    //   TemporaryPassword: password,
-    //   UserAttributes: [
-    //     {
-    //       Name: 'email',
-    //       Value: email,
-    //     },
-    //     {
-    //       Name: 'phone_number',
-    //       Value: phone_number,
-    //     },
-    //     {
-    //       Name: 'email_verified',
-    //       Value: 'true',
-    //     },
-    //     {
-    //       Name: 'phone_number_verified',
-    //       Value: 'true'
-    //     }
-    //   ],
-    //   MessageAction: MessageActionType.SUPPRESS,
-    // };
-    // const createUserCommand = new AdminCreateUserCommand(createParams);
-    // const createUserResult = await this.providerClient.send(createUserCommand);
-    // const setPasswordParams = {
-    //   UserPoolId: this.UserPoolId,
-    //   Username: email,
-    //   Password: password,
-    //   Permanent: true,
-    // };
+      bulkCreate.push({
+        name: row["name"],
+        email: row["email"],
+        mobile_number: `+91${row["Contact Number"]}`,
+        designation: "RM",
+        role_id: [],
+        corporation_id: 3,
+        is_active: false,
+        is_first_time_login: true,
+        is_external: true,
+      });
+    }
 
-    // const setPasswordCommand = new AdminSetUserPasswordCommand(setPasswordParams);
-    // await this.providerClient.send(setPasswordCommand);
+    await User.bulkCreate(bulkCreate, { ignoreDuplicates: true });
+
+    for (const user of bulkCreate) {
+      if (skipCognitoEmails.has(user.email.toLowerCase())) {
+        console.log(`email already in Cognito, skipping Cognito creation:${user.email}`);
+        continue;
+      }
+      try {
+        const createParams = {
+          UserPoolId: userPoolId,
+          Username: user.email,
+          UserAttributes: [
+            { Name: "email", Value: user.email },
+            { Name: "phone_number", Value: user.mobile_number },
+            { Name: "email_verified", Value: "true" },
+            { Name: "phone_number_verified", Value: "true" },
+          ],
+          MessageAction: MessageActionType.SUPPRESS,
+        };
+        const createUserCommand = new AdminCreateUserCommand(createParams);
+        await client.send(createUserCommand);
+
+        const setPasswordParams = {
+          UserPoolId: userPoolId,
+          Username: user.email,
+          Password: "Buzzworks@123",
+          Permanent: true,
+        };
+        const setPasswordCommand = new AdminSetUserPasswordCommand(
+          setPasswordParams,
+        );
+        await client.send(setPasswordCommand);
+      } catch (cognitoErr) {
+        console.error(
+          `Failed to create Cognito user for ${user.email}:`,
+          cognitoErr,
+        );
+      }
+    }
 
     res.json({
       message: "Users inserted successfully",
