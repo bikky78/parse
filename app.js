@@ -1,4 +1,5 @@
 // app.js
+require("dotenv").config();
 const express = require("express");
 const multer = require("multer");
 const xlsx = require("xlsx");
@@ -45,11 +46,10 @@ const {
   ListUsersCommand,
 } = require("@aws-sdk/client-cognito-identity-provider");
 
-// let UserPoolId = process.env.USER_POOL_ID;
-// let ClientId = process.env.CLIENT_ID;
-// let region = process.env.REGION;
-// let userPool = new CognitoUserPool({UserPoolId: this.UserPoolId,ClientId: this.ClientId});
-// let providerClient = new CognitoIdentityProviderClient({region: this.region});
+let UserPoolId = process.env.USER_POOL_ID;
+let ClientId = process.env.CLIENT_ID;
+let region = process.env.REGION;
+let providerClient = new CognitoIdentityProviderClient({ region: region });
 const EmailTemplate = {
   TASK_ASSIGNED_INVITATION_TO_EMPLOYEE:
     "TaskAssignedInvitationToEmployeeTemplate",
@@ -60,12 +60,12 @@ const EmailTemplate = {
 async function checkUserExistsByEmail(email) {
   try {
     const command = new ListUsersCommand({
-      UserPoolId: userPoolId,
+      UserPoolId: UserPoolId,
       Filter: `email = "${email}"`,
       Limit: 1,
     });
 
-    const response = await client.send(command);
+    const response = await providerClient.send(command);
 
     if (response.Users && response.Users.length > 0) {
       console.log("User found:", response.Users[0].Username);
@@ -117,8 +117,8 @@ app.post("/create_user_excel", upload.single("file"), async (req, res) => {
         mobile_number: `+91${row["Contact Number"]}`,
         designation: "RM",
         role_id: [],
-        corporation_id: 3,
-        is_active: false,
+        corporation_id: 1460,
+        is_active: true,
         is_first_time_login: true,
         is_external: true,
       });
@@ -128,12 +128,14 @@ app.post("/create_user_excel", upload.single("file"), async (req, res) => {
 
     for (const user of bulkCreate) {
       if (skipCognitoEmails.has(user.email.toLowerCase())) {
-        console.log(`email already in Cognito, skipping Cognito creation:${user.email}`);
+        console.log(
+          `email already in Cognito, skipping Cognito creation:${user.email}`,
+        );
         continue;
       }
       try {
         const createParams = {
-          UserPoolId: userPoolId,
+          UserPoolId: UserPoolId,
           Username: user.email,
           UserAttributes: [
             { Name: "email", Value: user.email },
@@ -144,10 +146,10 @@ app.post("/create_user_excel", upload.single("file"), async (req, res) => {
           MessageAction: MessageActionType.SUPPRESS,
         };
         const createUserCommand = new AdminCreateUserCommand(createParams);
-        await client.send(createUserCommand);
+        await providerClient.send(createUserCommand);
 
         const setPasswordParams = {
-          UserPoolId: userPoolId,
+          UserPoolId: UserPoolId,
           Username: user.email,
           Password: "Buzzworks@123",
           Permanent: true,
@@ -155,7 +157,7 @@ app.post("/create_user_excel", upload.single("file"), async (req, res) => {
         const setPasswordCommand = new AdminSetUserPasswordCommand(
           setPasswordParams,
         );
-        await client.send(setPasswordCommand);
+        await providerClient.send(setPasswordCommand);
       } catch (cognitoErr) {
         console.error(
           `Failed to create Cognito user for ${user.email}:`,
