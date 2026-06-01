@@ -52,6 +52,9 @@ const Employee = sequelize.define(
     legal_entity_id: DataTypes.INTEGER,
     sub_entity_id: DataTypes.INTEGER,
     corporation_id: DataTypes.INTEGER,
+    designation_id: DataTypes.INTEGER,
+    department_id: DataTypes.INTEGER,
+    status: DataTypes.STRING,
   },
   {
     schema: "employee",
@@ -217,7 +220,11 @@ const CorporationMaster = sequelize.define(
     enable_msp: {
       type: DataTypes.BOOLEAN,
       defaultValue: false,
-    }
+    },
+    isWhatsappApiEnabled: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
   },
   {
     tableName: "corporation_master",
@@ -259,19 +266,104 @@ const LegalEntityMaster = sequelize.define(
     gstin: DataTypes.STRING,
     tan: DataTypes.STRING,
     act_applicable: DataTypes.STRING,
+    industry_id: DataTypes.INTEGER,
     basic_capture: DataTypes.BOOLEAN,
     enhanced_capture: DataTypes.BOOLEAN,
-    status: DataTypes.BOOLEAN,
+    aadhar_mode_id: DataTypes.INTEGER,
+    pan_mode_id: DataTypes.INTEGER,
+    bank_mode_id: DataTypes.INTEGER,
+    status: DataTypes.STRING,
     created_by: DataTypes.INTEGER,
     modified_by: DataTypes.INTEGER,
     is_save_as_draft: DataTypes.BOOLEAN,
     is_complete: DataTypes.BOOLEAN,
     deleted_by: DataTypes.INTEGER,
+    type_of_business: DataTypes.STRING,
     deleted_at: DataTypes.DATE,
+    isRpaEnabled: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
+    supported_hiring_types: {
+      type: DataTypes.ARRAY(DataTypes.INTEGER),
+    },
+    supported_billing_models: {
+      type: DataTypes.ARRAY(DataTypes.INTEGER),
+    },
+    ideal_margin_pct: DataTypes.FLOAT,
+    minimum_margin_pct: DataTypes.FLOAT,
+    permanent_hiring_fee_pct: DataTypes.FLOAT,
+    contract_to_hire_conversion_fee_pct: DataTypes.FLOAT,
+    allow_fee_override: DataTypes.BOOLEAN,
   },
   {
     tableName: "legal_entity_master",
     schema: "global",
+  }
+);
+
+const DepartmentMaster = sequelize.define(
+  "DepartmentMaster",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    name: DataTypes.STRING,
+    description: DataTypes.STRING,
+    department_code: DataTypes.STRING,
+    corporation_id: DataTypes.INTEGER,
+    status: {
+      type: DataTypes.ENUM("Active", "Inactive"),
+      defaultValue: "Active",
+    },
+    is_save_as_draft: DataTypes.BOOLEAN,
+    is_complete: DataTypes.BOOLEAN,
+    created_by: DataTypes.INTEGER,
+    modified_by: DataTypes.INTEGER,
+    deleted_by: DataTypes.INTEGER,
+    created_on: DataTypes.DATE,
+    modified_on: DataTypes.DATE,
+    deleted_on: DataTypes.DATE,
+  },
+  {
+    tableName: "department_master",
+    schema: "employee",
+    timestamps: true,
+  }
+);
+
+const DesignationMaster = sequelize.define(
+  "DesignationMaster",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    name: DataTypes.STRING,
+    description: DataTypes.STRING,
+    corporation_id: DataTypes.INTEGER,
+    is_save_as_draft: DataTypes.BOOLEAN,
+    is_complete: DataTypes.BOOLEAN,
+    designation_code: DataTypes.STRING,
+    skill_level_id: DataTypes.INTEGER,
+    customer_id: DataTypes.STRING,
+    status: {
+      type: DataTypes.ENUM("Active", "Inactive"),
+      defaultValue: "Active",
+    },
+    created_by: DataTypes.INTEGER,
+    modified_by: DataTypes.INTEGER,
+    modified_at: DataTypes.DATE,
+    deleted_by: DataTypes.INTEGER,
+    deleted_at: DataTypes.DATE,
+  },
+  {
+    tableName: "designation_master",
+    schema: "employee",
+    timestamps: true,
   }
 );
 
@@ -636,4 +728,40 @@ const EmployeeExitDetails = sequelize.define(
 );
 
 
-module.exports = { sequelize, User,Employee ,PFOnboarding,PFProfile,EmployeeTasksOnboarding,EmailLogs,LegalEntityMaster,TaskEntitiesConfig,TaskMasterOnboarding ,LeaveAccrual,EmployeeExitDetails};
+const CandidateCustomFormConfig = sequelize.define(
+  "CandidateCustomFormConfig",
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    candidate_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    form_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    data: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+    },
+    created_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    updated_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+  },
+  {
+    tableName: "candidate_custom_form_config",
+    schema: "custom_fields",
+    timestamps: true,
+  }
+);
+
+module.exports = { sequelize, User, Employee, PFOnboarding, PFProfile, EmployeeTasksOnboarding, EmailLogs, LegalEntityMaster, TaskEntitiesConfig, TaskMasterOnboarding, LeaveAccrual, EmployeeExitDetails, CandidateCustomFormConfig, DepartmentMaster, DesignationMaster };

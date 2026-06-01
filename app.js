@@ -17,6 +17,7 @@ const {
   TaskMasterOnboarding,
   LeaveAccrual,
   EmployeeExitDetails,
+  CandidateCustomFormConfig,
 } = require("./db");
 const { sendTemplatedEmail, sendRawEmail } = require("./email.js");
 const app = express();
@@ -313,11 +314,11 @@ app.post("/invite-user", upload.single("file"), async (req, res) => {
 
       // 7. Send invitation email
       try {
-        let template = "SignUpTemplate";
+        let template = "EmployeeMigrationInvitationTemplate";
         let sendData = {
           candidate_name: userData.name || "User",
           login_link: "https://hcm.veytan.com/signin-new?",
-          company_name: "MUTHOOT HOME LOAN",
+          company_name: "IDFC",
         };
 
         // Add timeout for email sending
@@ -326,8 +327,8 @@ app.post("/invite-user", upload.single("file"), async (req, res) => {
             userData.email,
             template,
             sendData,
-            ["hema@buzzworks.com"],
-            ["hema@buzzworks.com"],
+            ["yuvaraj@buzzworks.com"],
+            ["yuvaraj@buzzworks.com"],
           ),
           new Promise(
             (_, reject) =>
@@ -717,7 +718,7 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
           taskMap.get(emp.candidate_id) || [],
         );
 
-        let newTasksToAssign = tasksToAssign.filter((t) => t.id === 637);
+        let newTasksToAssign = tasksToAssign.filter((t) => t.id === 736);
 
         if (tasksToAssign.length === 0) return;
 
@@ -738,11 +739,11 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
               bulkInsertTasks.push({
                 task_id: task.id,
                 assigned_to: emp.candidate_id,
-                due_date: "2025-12-24",
+                due_date: "2026-05-31",
               });
               taskTemplate.push({
                 name: task.name,
-                due_date: "2025-12-24",
+                due_date: "2026-05-31",
               });
             }
           }
@@ -756,37 +757,37 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
         if (!sentEmailSet.has(emp.employee_id)) {
           const legalEntityName = legalEntityMap.get(emp.legal_entity_id)?.name;
 
-          // try {
-          //   await sendTemplatedEmail(
-          //     emp.work_email || emp.personal_email,
-          //     EmailTemplate.TASK_ASSIGNED_INVITATION_TO_EMPLOYEE,
-          //     {
-          //       employee_name: emp.first_name,
-          //       company_name: legalEntityName,
-          //       tasks: taskTemplate,
-          //       login_link: `${EmailTemplate.LOGIN_LINK}${Buffer.from(
-          //         emp.work_email
-          //       ).toString("base64")}`,
-          //     }
-          //   );
+          try {
+            await sendTemplatedEmail(
+              emp.work_email || emp.personal_email,
+              EmailTemplate.TASK_ASSIGNED_INVITATION_TO_EMPLOYEE,
+              {
+                employee_name: emp.first_name,
+                company_name: legalEntityName,
+                tasks: taskTemplate,
+                login_link: `${EmailTemplate.LOGIN_LINK}${Buffer.from(
+                  emp.work_email,
+                ).toString("base64")}`,
+              },
+            );
 
-          //   await EmailLogs.create({
-          //     employee_id: emp.employee_id,
-          //     email_template:
-          //       EmailTemplate.TASK_ASSIGNED_INVITATION_TO_EMPLOYEE,
-          //     sent_at: today,
-          //     status: "sent",
-          //   });
-          // } catch (err) {
-          //   console.error(`Failed to send email to ${emp.first_name}`, err);
-          //   await EmailLogs.create({
-          //     employee_id: emp.employee_id,
-          //     email_template:
-          //       EmailTemplate.TASK_ASSIGNED_INVITATION_TO_EMPLOYEE,
-          //     sent_at: today,
-          //     status: "failed",
-          //   });
-          // }
+            await EmailLogs.create({
+              employee_id: emp.employee_id,
+              email_template:
+                EmailTemplate.TASK_ASSIGNED_INVITATION_TO_EMPLOYEE,
+              sent_at: today,
+              status: "sent",
+            });
+          } catch (err) {
+            console.error(`Failed to send email to ${emp.first_name}`, err);
+            await EmailLogs.create({
+              employee_id: emp.employee_id,
+              email_template:
+                EmailTemplate.TASK_ASSIGNED_INVITATION_TO_EMPLOYEE,
+              sent_at: today,
+              status: "failed",
+            });
+          }
         }
       });
 
@@ -997,6 +998,696 @@ app.post("/send-raw-email", upload.single("file"), async (req, res) => {
     throw new Error(`Error while Sending Email: ${err}`);
   }
 });
+
+app.post("/update-branch-details", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(sheet);
+
+    const updated = [];
+    const skipped = [];
+    const notFound = [];
+
+    for (const row of rows) {
+      const candidateId = row["Candidate ID"];
+      const branchName = row["Branch Name"];
+      const branchAddress = row["Branch Address"];
+
+      if (!candidateId) {
+        skipped.push({ row, reason: "Missing Candidate ID" });
+        continue;
+      }
+
+      const record = await CandidateCustomFormConfig.findOne({
+        where: { candidate_id: candidateId, form_id: 199 },
+      });
+
+      if (!record) {
+        await CandidateCustomFormConfig.create({
+          candidate_id: candidateId,
+          form_id: 199,
+          data: [
+            {
+              type: "singleSelect",
+              label: "Branch Name",
+              value: branchName,
+              uniqueName: "branch_name",
+            },
+            {
+              type: "dropdown",
+              label: "Branch Address",
+              value: branchAddress,
+              uniqueName: "branch_address",
+            },
+          ],
+        });
+        updated.push({ candidateId, action: "created" });
+        continue;
+      }
+
+      const data = record.data;
+      if (!Array.isArray(data)) {
+        skipped.push({ candidateId, reason: "data is not an array" });
+        continue;
+      }
+
+      let changed = false;
+      const updatedData = data.map((field) => {
+        if (field.uniqueName === "branch_name" && !field.value && branchName) {
+          changed = true;
+          return { ...field, value: branchName };
+        }
+        if (
+          field.uniqueName === "branch_address" &&
+          !field.value &&
+          branchAddress
+        ) {
+          changed = true;
+          return { ...field, value: branchAddress };
+        }
+        return field;
+      });
+
+      if (changed) {
+        await CandidateCustomFormConfig.update(
+          { data: updatedData },
+          { where: { id: record.id } },
+        );
+        updated.push({ candidateId, recordId: record.id });
+      } else {
+        skipped.push({
+          candidateId,
+          recordId: record.id,
+          reason: "values already set or fields not found",
+        });
+      }
+    }
+
+    res.json({
+      message: "Branch details update completed",
+      summary: {
+        totalRows: rows.length,
+        updated: updated.length,
+        skipped: skipped.length,
+        notFound: notFound.length,
+      },
+      details: { updated, skipped, notFound },
+    });
+  } catch (err) {
+    console.error("Error updating branch details:", err);
+    res
+      .status(500)
+      .json({ error: "Something went wrong", details: err.message });
+  }
+});
+
+app.post(
+  "/update-employee-dept-desig",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows = xlsx.utils.sheet_to_json(sheet);
+
+      const updatePayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const employeeCode = row["employee_code"]?.toString().trim();
+        const corporationId = parseInt(row["corporation_id"]);
+        const legalEntityId = parseInt(row["legal_entity_id"]);
+        const designationId = parseInt(row["designation_id"]);
+
+        if (
+          !employeeCode ||
+          isNaN(corporationId) ||
+          isNaN(legalEntityId) ||
+          isNaN(designationId)
+        ) {
+          skipped.push({
+            employeeCode,
+            reason: "Missing or invalid column value",
+          });
+          continue;
+        }
+
+        updatePayload.push({
+          employeeCode,
+          designationId,
+          corporationId,
+          legalEntityId,
+        });
+      }
+
+      // Bulk update using VALUES list — one query per chunk of 1000 rows
+      const CHUNK_SIZE = 1000;
+      let totalUpdated = 0;
+
+      for (let i = 0; i < updatePayload.length; i += CHUNK_SIZE) {
+        const chunk = updatePayload.slice(i, i + CHUNK_SIZE);
+
+        const values = chunk
+          .map(
+            (_, idx) =>
+              `($${idx * 4 + 1}, $${idx * 4 + 2}::int, $${idx * 4 + 3}::int, $${idx * 4 + 4}::int)`,
+          )
+          .join(", ");
+
+        const params = chunk.flatMap((r) => [
+          r.employeeCode,
+          r.designationId,
+          r.corporationId,
+          r.legalEntityId,
+        ]);
+
+        const sql = `
+        UPDATE employee.employee AS e
+        SET designation_id = v.designation_id
+        FROM (VALUES ${values}) AS v(employee_code, designation_id, corporation_id, legal_entity_id)
+        WHERE e.employee_code   = v.employee_code
+          AND e.corporation_id  = v.corporation_id
+          AND e.legal_entity_id = v.legal_entity_id
+      `;
+
+        const [, meta] = await sequelize.query(sql, { bind: params });
+        totalUpdated += meta?.rowCount ?? 0;
+      }
+
+      // Find unmatched rows — check each condition separately to surface the reason
+      const notUpdated = [];
+      if (totalUpdated < updatePayload.length) {
+        const allCodes = updatePayload.map((r) => r.employeeCode);
+        const found = await Employee.findAll({
+          where: { employee_code: { [Op.in]: allCodes } },
+          attributes: [
+            "employee_code",
+            "corporation_id",
+            "legal_entity_id",
+            "status",
+          ],
+          raw: true,
+        });
+
+        const foundMap = new Map();
+        for (const e of found) {
+          const key = `${e.employee_code}_${e.corporation_id}_${e.legal_entity_id}`;
+          foundMap.set(key, e);
+        }
+
+        for (const r of updatePayload) {
+          const key = `${r.employeeCode}_${r.corporationId}_${r.legalEntityId}`;
+          const emp = foundMap.get(key);
+          if (!emp) {
+            const codeExists = found.find(
+              (e) => e.employee_code === r.employeeCode,
+            );
+            notUpdated.push({
+              employeeCode: r.employeeCode,
+              reason: codeExists
+                ? `corp/legal mismatch — DB has corporation_id:${codeExists.corporation_id} legal_entity_id:${codeExists.legal_entity_id}`
+                : "employee_code not found in DB",
+            });
+          }
+        }
+      }
+
+      res.json({
+        message: "Employee designation update completed",
+        summary: {
+          totalRows: rows.length,
+          totalUpdated,
+          notUpdated: notUpdated.length,
+          skipped: skipped.length,
+        },
+        notUpdatedDetails: notUpdated,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating employee dept/desig:", err);
+      res
+        .status(500)
+        .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /update-employee-pf-uan
+// Excel columns: email, corporation_id, pf_id, uan
+// Resolves candidate_id from employee.employee using personal_email + corporation_id,
+// then bulk-updates both:
+//   cs_in.pf_master_onboarding  (pf_id, uan)
+//   cs_in.pf_master_profile     (pf_id, uan, corporation_id, personal_email)
+// ---------------------------------------------------------------------------
+app.post("/update-employee-pf-uan", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(sheet);
+
+    const inputPayload = [];
+    const skipped = [];
+
+    for (const row of rows) {
+      const email = row["email"]?.toString().trim().toLowerCase();
+      const corporationId = parseInt(row["corporation_id"]);
+      const pfId = row["pf_id"]?.toString().trim() || null;
+      const uan = row["uan"]?.toString().trim() || null;
+
+      if (!email || isNaN(corporationId) || (!pfId && !uan)) {
+        skipped.push({
+          email,
+          reason:
+            !email || isNaN(corporationId)
+              ? "Missing or invalid email / corporation_id"
+              : "Both pf_id and uan are empty — nothing to update",
+        });
+        continue;
+      }
+
+      inputPayload.push({ email, corporationId, pfId, uan });
+    }
+
+    if (inputPayload.length === 0) {
+      return res.json({
+        message: "No valid rows to process",
+        summary: {
+          totalRows: rows.length,
+          totalUpdated: 0,
+          notUpdated: 0,
+          skipped: skipped.length,
+        },
+        skippedDetails: skipped,
+      });
+    }
+
+    // ── Step 1: resolve candidate_id via personal_email + corporation_id ──
+    const allEmails = inputPayload.map((r) => r.email); // already trimmed + lowercased
+
+    const employees = await Employee.findAll({
+      where: {
+        [Op.and]: [
+          // TRIM + LOWER on DB side handles trailing spaces & mixed case in DB
+          sequelize.where(
+            sequelize.fn(
+              "LOWER",
+              sequelize.fn("TRIM", sequelize.col("personal_email")),
+            ),
+            { [Op.in]: allEmails },
+          ),
+          { status: "Active" },
+        ],
+      },
+      attributes: [
+        "personal_email",
+        "corporation_id",
+        "candidate_id",
+        "status",
+      ],
+      raw: true,
+    });
+
+    // Normalise DB emails (trim + lowercase) for consistent keying
+    const empMap = new Map();
+    const foundEmailSet = new Set();
+    for (const e of employees) {
+      const normEmail = e.personal_email?.trim().toLowerCase();
+      foundEmailSet.add(normEmail);
+      const key = `${normEmail}_${e.corporation_id}`;
+      empMap.set(key, { ...e, personal_email: normEmail });
+    }
+
+    const updatePayload = []; // rows with resolved candidate_id
+    const notResolved = []; // all failure reasons collected here
+
+    // 1. Flag every input email that had zero DB match upfront
+    for (const r of inputPayload) {
+      if (!foundEmailSet.has(r.email)) {
+        notResolved.push({
+          email: r.email,
+          reason: "email not found in DB (or employee not Active)",
+        });
+      }
+    }
+
+    // 2. For emails that were found, check corp match & candidate_id
+    for (const r of inputPayload) {
+      if (!foundEmailSet.has(r.email)) continue; // already captured above
+
+      const key = `${r.email}_${r.corporationId}`;
+      const emp = empMap.get(key);
+
+      if (!emp) {
+        // Email exists in DB but corporation_id doesn't match
+        const anyMatch = employees.find(
+          (e) => e.personal_email?.trim().toLowerCase() === r.email,
+        );
+        notResolved.push({
+          email: r.email,
+          reason: `corporation mismatch — DB has corporation_id:${anyMatch?.corporation_id}`,
+        });
+        continue;
+      }
+
+      if (!emp.candidate_id) {
+        notResolved.push({
+          email: r.email,
+          reason: "employee has no candidate_id",
+        });
+        continue;
+      }
+
+      updatePayload.push({
+        ...r,
+        candidateId: emp.candidate_id,
+        personalEmail: emp.personal_email,
+      });
+    }
+
+    // ── Step 2: bulk-update both PF tables in chunks of 1000 ─────────────
+    const CHUNK_SIZE = 1000;
+    let totalUpdatedOnboarding = 0;
+    let totalUpdatedProfile = 0;
+
+    for (let i = 0; i < updatePayload.length; i += CHUNK_SIZE) {
+      const chunk = updatePayload.slice(i, i + CHUNK_SIZE);
+
+      // pf_master_onboarding — updates pf_id & uan (3 cols)
+      const valuesOn = chunk
+        .map(
+          (_, idx) =>
+            `($${idx * 3 + 1}::int, $${idx * 3 + 2}, $${idx * 3 + 3})`,
+        )
+        .join(", ");
+
+      const paramsOn = chunk.flatMap((r) => [r.candidateId, r.pfId, r.uan]);
+
+      const sqlOnboarding = `
+          UPDATE cs_in.pf_master_onboarding AS t
+          SET pf_id  = v.pf_id,
+              uan = v.uan
+          FROM (VALUES ${valuesOn}) AS v(candidate_id, pf_id, uan)
+          WHERE t.candidate_id = v.candidate_id
+        `;
+      const [, metaOn] = await sequelize.query(sqlOnboarding, {
+        bind: paramsOn,
+      });
+      totalUpdatedOnboarding += metaOn?.rowCount ?? 0;
+
+      // pf_master_profile — updates pf_id, uan only (3 cols)
+      const valuesPr = chunk
+        .map(
+          (_, idx) =>
+            `($${idx * 3 + 1}::int, $${idx * 3 + 2}, $${idx * 3 + 3})`,
+        )
+        .join(", ");
+
+      const paramsPr = chunk.flatMap((r) => [r.candidateId, r.pfId, r.uan]);
+
+      const sqlProfile = `
+          UPDATE cs_in.pf_master_profile AS t
+          SET pf_id      = v.pf_id,
+              uan = v.uan
+          FROM (VALUES ${valuesPr}) AS v(candidate_id, pf_id, uan)
+          WHERE t.candidate_id = v.candidate_id
+        `;
+      const [, metaPr] = await sequelize.query(sqlProfile, {
+        bind: paramsPr,
+      });
+      totalUpdatedProfile += metaPr?.rowCount ?? 0;
+    }
+
+    const notFoundInDB = notResolved.filter((r) =>
+      r.reason.startsWith("email not found"),
+    );
+    const corpMismatch = notResolved.filter((r) =>
+      r.reason.startsWith("corporation mismatch"),
+    );
+    const noCandidate = notResolved.filter((r) =>
+      r.reason.startsWith("employee has no candidate_id"),
+    );
+
+    res.json({
+      message: "Employee PF / UAN update completed",
+      summary: {
+        totalRows: rows.length,
+        validRows: updatePayload.length,
+        updatedInOnboarding: totalUpdatedOnboarding,
+        updatedInProfile: totalUpdatedProfile,
+        notFoundInDB: notFoundInDB.length,
+        corporationMismatch: corpMismatch.length,
+        noCandidate: noCandidate.length,
+        skipped: skipped.length,
+      },
+      notFoundInDB,
+      corporationMismatchDetails: corpMismatch,
+      noCandidateDetails: noCandidate,
+      skippedDetails: skipped,
+    });
+  } catch (err) {
+    console.error("Error updating employee PF/UAN:", err);
+    res
+      .status(500)
+      .json({ error: "Something went wrong", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /update-employee-bank-details
+// Excel columns: email, corporation_id, account_number, ifsc_code, bank_name, account_type
+// Resolves candidate_id from employee.employee using personal_email + corporation_id,
+// then bulk-updates both:
+//   cs_in.bank_master_onboarding  (account_number, ifsc_code, bank_name, account_type)
+//   cs_in.bank_master_profile     (account_number, ifsc_code, bank_name, account_type)
+// ---------------------------------------------------------------------------
+app.post(
+  "/update-employee-bank-details",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows = xlsx.utils.sheet_to_json(sheet);
+
+      const inputPayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const email = row["email"]?.toString().trim().toLowerCase();
+        const corporationId = 714; //parseInt(row["corporation_id"]);
+        const bankAccountNumber =
+          row["bank_account_number"]?.toString().trim() || null;
+        const ifscCode = row["ifsc_code"]?.toString().trim() || null;
+        const bankName = row["bank_name"]?.toString().trim() || null;
+
+        if (
+          !email ||
+          isNaN(corporationId) ||
+          (!bankAccountNumber && !ifscCode && !bankName)
+        ) {
+          skipped.push({
+            email,
+            reason:
+              !email || isNaN(corporationId)
+                ? "Missing or invalid email / corporation_id"
+                : "All bank fields are empty — nothing to update",
+          });
+          continue;
+        }
+
+        inputPayload.push({
+          email,
+          corporationId,
+          bankAccountNumber,
+          ifscCode,
+          bankName,
+        });
+      }
+
+      if (inputPayload.length === 0) {
+        return res.json({
+          message: "No valid rows to process",
+          summary: {
+            totalRows: rows.length,
+            totalUpdated: 0,
+            skipped: skipped.length,
+          },
+          skippedDetails: skipped,
+        });
+      }
+
+      // ── Step 1: resolve candidate_id via personal_email + corporation_id ──
+      const allEmails = inputPayload.map((r) => r.email);
+
+      const employees = await Employee.findAll({
+        where: {
+          [Op.and]: [
+            sequelize.where(
+              sequelize.fn(
+                "LOWER",
+                sequelize.fn("TRIM", sequelize.col("personal_email")),
+              ),
+              { [Op.in]: allEmails },
+            ),
+            { status: "Active" },
+          ],
+        },
+        attributes: [
+          "personal_email",
+          "corporation_id",
+          "candidate_id",
+          "status",
+        ],
+        raw: true,
+      });
+
+      const empMap = new Map();
+      const foundEmailSet = new Set();
+      for (const e of employees) {
+        const normEmail = e.personal_email?.trim().toLowerCase();
+        foundEmailSet.add(normEmail);
+        const key = `${normEmail}_${e.corporation_id}`;
+        empMap.set(key, { ...e, personal_email: normEmail });
+      }
+
+      const updatePayload = [];
+      const notResolved = [];
+
+      for (const r of inputPayload) {
+        if (!foundEmailSet.has(r.email)) {
+          notResolved.push({
+            email: r.email,
+            reason: "email not found in DB (or employee not Active)",
+          });
+        }
+      }
+
+      for (const r of inputPayload) {
+        if (!foundEmailSet.has(r.email)) continue;
+
+        const key = `${r.email}_${r.corporationId}`;
+        const emp = empMap.get(key);
+
+        if (!emp) {
+          const anyMatch = employees.find(
+            (e) => e.personal_email?.trim().toLowerCase() === r.email,
+          );
+          notResolved.push({
+            email: r.email,
+            reason: `corporation mismatch — DB has corporation_id:${anyMatch?.corporation_id}`,
+          });
+          continue;
+        }
+
+        if (!emp.candidate_id) {
+          notResolved.push({
+            email: r.email,
+            reason: "employee has no candidate_id",
+          });
+          continue;
+        }
+
+        updatePayload.push({ ...r, candidateId: emp.candidate_id });
+      }
+
+      // ── Step 2: bulk-update both bank tables via unnest (one query each) ───
+      let totalUpdatedOnboarding = 0;
+      let totalUpdatedProfile = 0;
+
+      if (updatePayload.length > 0) {
+        const bindParams = [
+          updatePayload.map((r) => r.candidateId), // $1 int[]
+          updatePayload.map((r) => r.bankAccountNumber), // $2 text[]
+          updatePayload.map((r) => r.ifscCode), // $3 text[]
+          updatePayload.map((r) => r.bankName), // $4 text[]
+        ];
+
+        const sqlOnboarding = `
+          UPDATE cs_in.bank_master_onboarding AS t
+          SET bank_account_number = v.bank_account_number,
+              bank_ifsc_code      = v.bank_ifsc_code,
+              bank_name           = v.bank_name
+          FROM unnest($1::int[], $2::text[], $3::text[], $4::text[])
+            AS v(candidate_id, bank_account_number, bank_ifsc_code, bank_name)
+          WHERE t.candidate_id = v.candidate_id
+        `;
+        const [, metaOn] = await sequelize.query(sqlOnboarding, {
+          bind: bindParams,
+        });
+        totalUpdatedOnboarding = metaOn?.rowCount ?? 0;
+
+        const sqlProfile = `
+          UPDATE cs_in.bank_master_profile AS t
+          SET bank_account_number = v.bank_account_number,
+              bank_ifsc_code      = v.bank_ifsc_code,
+              bank_name           = v.bank_name
+          FROM unnest($1::int[], $2::text[], $3::text[], $4::text[])
+            AS v(candidate_id, bank_account_number, bank_ifsc_code, bank_name)
+          WHERE t.candidate_id = v.candidate_id
+        `;
+        const [, metaPr] = await sequelize.query(sqlProfile, {
+          bind: bindParams,
+        });
+        totalUpdatedProfile = metaPr?.rowCount ?? 0;
+      }
+
+      const notFoundInDB = notResolved.filter((r) =>
+        r.reason.startsWith("email not found"),
+      );
+      const corpMismatch = notResolved.filter((r) =>
+        r.reason.startsWith("corporation mismatch"),
+      );
+      const noCandidate = notResolved.filter((r) =>
+        r.reason.startsWith("employee has no candidate_id"),
+      );
+
+      res.json({
+        message: "Employee bank details update completed",
+        summary: {
+          totalRows: rows.length,
+          validRows: updatePayload.length,
+          updatedInOnboarding: totalUpdatedOnboarding,
+          updatedInProfile: totalUpdatedProfile,
+          notFoundInDB: notFoundInDB.length,
+          corporationMismatch: corpMismatch.length,
+          noCandidate: noCandidate.length,
+          skipped: skipped.length,
+        },
+        notFoundInDB,
+        corporationMismatchDetails: corpMismatch,
+        noCandidateDetails: noCandidate,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating employee bank details:", err);
+      res
+        .status(500)
+        .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
 
 app.listen(3020, async () => {
   try {
