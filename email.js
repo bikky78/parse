@@ -3,11 +3,18 @@ import {
   SendTemplatedEmailCommand,
   SendRawEmailCommand,
 } from "@aws-sdk/client-ses";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
+import https from "https";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
-const sesClient = new SESClient({ region: "ap-south-1" });
+const sesClient = new SESClient({
+  region: "ap-south-1",
+  requestHandler: new NodeHttpHandler({
+    httpsAgent: new https.Agent({ maxSockets: 500, keepAlive: true }),
+  }),
+});
 
 async function sendTemplatedEmail(
   recipientEmail,
@@ -36,9 +43,8 @@ async function sendTemplatedEmail(
   };
 
   try {
-    const client = new SESClient({ region: "ap-south-1" });
     const command = new SendTemplatedEmailCommand(params);
-    const result = await client.send(command);
+    const result = await sesClient.send(command);
 
     console.log(`Email sent successfully to ${recipientEmail}`, result);
   } catch (error) {
@@ -77,14 +83,12 @@ async function sendRawEmail({
   raw += `${htmlBody}\n\n`;
 
   for (const file of attachments) {
-    const absolutePath = path.resolve(file.path);
-
-    if (!fs.existsSync(absolutePath)) {
-      throw new Error(`Attachment not found: ${absolutePath}`);
-    }
-
-    const fileContent = fs.readFileSync(absolutePath).toString("base64");
-    const filename = path.basename(absolutePath);
+    const fileContent = file.content ?? (() => {
+      const absolutePath = path.resolve(file.path);
+      if (!fs.existsSync(absolutePath)) throw new Error(`Attachment not found: ${absolutePath}`);
+      return fs.readFileSync(absolutePath).toString("base64");
+    })();
+    const filename = file.filename ?? path.basename(path.resolve(file.path ?? ""));
 
     raw += `--${boundary}\n`;
     raw += `Content-Type: ${file.mimeType}; name="${filename}"\n`;

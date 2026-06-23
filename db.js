@@ -764,4 +764,36 @@ const CandidateCustomFormConfig = sequelize.define(
   }
 );
 
-module.exports = { sequelize, User, Employee, PFOnboarding, PFProfile, EmployeeTasksOnboarding, EmailLogs, LegalEntityMaster, TaskEntitiesConfig, TaskMasterOnboarding, LeaveAccrual, EmployeeExitDetails, CandidateCustomFormConfig, DepartmentMaster, DesignationMaster };
+const EmployeeOtherDocuments = sequelize.define(
+  "EmployeeOtherDocuments",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    candidate_id: { type: DataTypes.INTEGER, allowNull: false },
+    document_type_id: { type: DataTypes.INTEGER, allowNull: true },
+    file_url: { type: DataTypes.ARRAY(DataTypes.JSONB), allowNull: true },
+    document_custom_name: { type: DataTypes.STRING, allowNull: true },
+    metadata: { type: DataTypes.JSONB, allowNull: true },
+    created_by: { type: DataTypes.INTEGER, allowNull: true },
+    updated_by: { type: DataTypes.INTEGER, allowNull: true },
+    is_completed: { type: DataTypes.BOOLEAN, allowNull: true },
+  },
+  { tableName: "employee_other_documents", schema: "employee", timestamps: true }
+);
+
+const EmployeeOtherDocumentsProfile = sequelize.define(
+  "EmployeeOtherDocumentsProfile",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    candidate_id: { type: DataTypes.INTEGER, allowNull: false },
+    document_type_id: { type: DataTypes.INTEGER, allowNull: true },
+    file_url: { type: DataTypes.ARRAY(DataTypes.JSONB), allowNull: true },
+    document_custom_name: { type: DataTypes.STRING, allowNull: true },
+    metadata: { type: DataTypes.JSONB, allowNull: true },
+    created_by: { type: DataTypes.INTEGER, allowNull: true },
+    updated_by: { type: DataTypes.INTEGER, allowNull: true },
+    is_completed: { type: DataTypes.BOOLEAN, allowNull: true },
+  },
+  { tableName: "employee_other_documents_profile", schema: "employee", timestamps: true }
+);
+
+module.exports = { sequelize, User, Employee, PFOnboarding, PFProfile, EmployeeTasksOnboarding, EmailLogs, LegalEntityMaster, TaskEntitiesConfig, TaskMasterOnboarding, LeaveAccrual, EmployeeExitDetails, CandidateCustomFormConfig, DepartmentMaster, DesignationMaster, EmployeeOtherDocuments, EmployeeOtherDocumentsProfile };

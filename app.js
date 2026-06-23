@@ -1,5 +1,7 @@
 // app.js
 require("dotenv").config();
+const https = require("https");
+https.globalAgent.maxSockets = 500;
 const express = require("express");
 const multer = require("multer");
 const xlsx = require("xlsx");
@@ -18,6 +20,8 @@ const {
   LeaveAccrual,
   EmployeeExitDetails,
   CandidateCustomFormConfig,
+  EmployeeOtherDocuments,
+  EmployeeOtherDocumentsProfile,
 } = require("./db");
 const { sendTemplatedEmail, sendRawEmail } = require("./email.js");
 const app = express();
@@ -25,7 +29,6 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 const { Op } = require("sequelize");
 const { uploadToS3, getPresignedURL } = require("./util.js");
-const pLimit = require("p-limit").default;
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
@@ -1107,6 +1110,8 @@ app.post("/update-branch-details", upload.single("file"), async (req, res) => {
   }
 });
 
+//bulk department and designation update
+
 app.post(
   "/update-employee-dept-desig",
   upload.single("file"),
@@ -1129,23 +1134,28 @@ app.post(
         const corporationId = parseInt(row["corporation_id"]);
         const legalEntityId = parseInt(row["legal_entity_id"]);
         const designationId = parseInt(row["designation_id"]);
+        const departmentId = parseInt(row["department_id"]);
 
-        if (
-          !employeeCode ||
-          isNaN(corporationId) ||
-          isNaN(legalEntityId) ||
-          isNaN(designationId)
-        ) {
+        if (!employeeCode || isNaN(corporationId) || isNaN(legalEntityId)) {
           skipped.push({
             employeeCode,
-            reason: "Missing or invalid column value",
+            reason: "Missing employee_code / corporation_id / legal_entity_id",
+          });
+          continue;
+        }
+
+        if (isNaN(designationId) && isNaN(departmentId)) {
+          skipped.push({
+            employeeCode,
+            reason: "Neither designation_id nor department_id provided",
           });
           continue;
         }
 
         updatePayload.push({
           employeeCode,
-          designationId,
+          designationId: isNaN(designationId) ? null : designationId,
+          departmentId: isNaN(departmentId) ? null : departmentId,
           corporationId,
           legalEntityId,
         });
@@ -1161,21 +1171,23 @@ app.post(
         const values = chunk
           .map(
             (_, idx) =>
-              `($${idx * 4 + 1}, $${idx * 4 + 2}::int, $${idx * 4 + 3}::int, $${idx * 4 + 4}::int)`,
+              `($${idx * 5 + 1}, $${idx * 5 + 2}::int, $${idx * 5 + 3}::int, $${idx * 5 + 4}::int, $${idx * 5 + 5}::int)`,
           )
           .join(", ");
 
         const params = chunk.flatMap((r) => [
           r.employeeCode,
           r.designationId,
+          r.departmentId,
           r.corporationId,
           r.legalEntityId,
         ]);
 
         const sql = `
         UPDATE employee.employee AS e
-        SET designation_id = v.designation_id
-        FROM (VALUES ${values}) AS v(employee_code, designation_id, corporation_id, legal_entity_id)
+        SET designation_id = COALESCE(v.designation_id, e.designation_id),
+            department_id  = COALESCE(v.department_id, e.department_id)
+        FROM (VALUES ${values}) AS v(employee_code, designation_id, department_id, corporation_id, legal_entity_id)
         WHERE e.employee_code   = v.employee_code
           AND e.corporation_id  = v.corporation_id
           AND e.legal_entity_id = v.legal_entity_id
@@ -1239,6 +1251,88 @@ app.post(
       res
         .status(500)
         .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /update-employee-dept-desig-v2
+// Excel columns: employee_id, department_id
+app.post(
+  "/update-employee-dept-desig-v2",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const rows = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+
+      const updatePayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const employeeId = parseInt(row["employee_id"]);
+        const departmentId = parseInt(row["department_id"]);
+
+        if (isNaN(employeeId) || isNaN(departmentId)) {
+          skipped.push({ employeeId, reason: isNaN(employeeId) ? "Missing or invalid employee_id" : "Missing or invalid department_id" });
+          continue;
+        }
+
+        updatePayload.push({ employeeId, departmentId });
+      }
+
+      if (updatePayload.length === 0)
+        return res.json({ message: "No valid rows to process", summary: { totalRows: rows.length, skipped: skipped.length }, skippedDetails: skipped });
+
+      const CHUNK_SIZE = 1000;
+      let totalUpdated = 0;
+
+      for (let i = 0; i < updatePayload.length; i += CHUNK_SIZE) {
+        const chunk = updatePayload.slice(i, i + CHUNK_SIZE);
+
+        const values = chunk
+          .map((_, idx) => `($${idx * 2 + 1}::int, $${idx * 2 + 2}::int)`)
+          .join(", ");
+
+        const params = chunk.flatMap((r) => [r.employeeId, r.departmentId]);
+
+        const sql = `
+          UPDATE employee.employee AS e
+          SET department_id = v.department_id
+          FROM (VALUES ${values}) AS v(employee_id, department_id)
+          WHERE e.employee_id = v.employee_id
+        `;
+
+        const [, meta] = await sequelize.query(sql, { bind: params });
+        totalUpdated += meta?.rowCount ?? 0;
+      }
+
+      const notFound = [];
+      if (totalUpdated < updatePayload.length) {
+        const allIds = updatePayload.map((r) => r.employeeId);
+        const found = await Employee.findAll({
+          where: { employee_id: { [Op.in]: allIds } },
+          attributes: ["employee_id"],
+          raw: true,
+        });
+        const foundSet = new Set(found.map((e) => e.employee_id));
+        for (const r of updatePayload) {
+          if (!foundSet.has(r.employeeId))
+            notFound.push({ employeeId: r.employeeId, reason: "employee_id not found in DB" });
+        }
+      }
+
+      res.json({
+        message: "Employee department update completed",
+        summary: { totalRows: rows.length, totalUpdated, notFound: notFound.length, skipped: skipped.length },
+        notFoundDetails: notFound,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating employee department v2:", err);
+      res.status(500).json({ error: "Something went wrong", details: err.message });
     }
   },
 );
@@ -1686,6 +1780,973 @@ app.post(
         .status(500)
         .json({ error: "Something went wrong", details: err.message });
     }
+  },
+);
+
+app.post(
+  "/update-employee-pan-details",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows = xlsx.utils.sheet_to_json(sheet);
+
+      const inputPayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const email = row["email"]?.toString().trim().toLowerCase();
+        const corporationId = 714;
+        const panNumber = row["pan_number"]?.toString().trim() || null;
+
+        if (!email || isNaN(corporationId) || !panNumber) {
+          skipped.push({
+            email,
+            reason:
+              !email || isNaN(corporationId)
+                ? "Missing or invalid email / corporation_id"
+                : "pan_number is empty — nothing to update",
+          });
+          continue;
+        }
+
+        inputPayload.push({ email, corporationId, panNumber });
+      }
+
+      if (inputPayload.length === 0) {
+        return res.json({
+          message: "No valid rows to process",
+          summary: {
+            totalRows: rows.length,
+            totalUpdated: 0,
+            skipped: skipped.length,
+          },
+          skippedDetails: skipped,
+        });
+      }
+
+      // Step 1: resolve candidate_id via personal_email + corporation_id
+      const allEmails = inputPayload.map((r) => r.email);
+
+      const employees = await Employee.findAll({
+        where: {
+          [Op.and]: [
+            sequelize.where(
+              sequelize.fn(
+                "LOWER",
+                sequelize.fn("TRIM", sequelize.col("personal_email")),
+              ),
+              { [Op.in]: allEmails },
+            ),
+          ],
+        },
+        attributes: ["personal_email", "corporation_id", "candidate_id"],
+        raw: true,
+      });
+
+      const empMap = new Map();
+      const foundEmailSet = new Set();
+      for (const e of employees) {
+        const normEmail = e.personal_email?.trim().toLowerCase();
+        foundEmailSet.add(normEmail);
+        empMap.set(`${normEmail}_${e.corporation_id}`, {
+          ...e,
+          personal_email: normEmail,
+        });
+      }
+
+      const updatePayload = [];
+      const notResolved = [];
+
+      for (const r of inputPayload) {
+        if (!foundEmailSet.has(r.email)) {
+          notResolved.push({ email: r.email, reason: "email not found in DB" });
+          continue;
+        }
+
+        const emp = empMap.get(`${r.email}_${r.corporationId}`);
+        if (!emp) {
+          const anyMatch = employees.find(
+            (e) => e.personal_email?.trim().toLowerCase() === r.email,
+          );
+          notResolved.push({
+            email: r.email,
+            reason: `corporation mismatch — DB has corporation_id:${anyMatch?.corporation_id}`,
+          });
+          continue;
+        }
+
+        if (!emp.candidate_id) {
+          notResolved.push({
+            email: r.email,
+            reason: "employee has no candidate_id",
+          });
+          continue;
+        }
+
+        updatePayload.push({ ...r, candidateId: emp.candidate_id });
+      }
+
+      // Step 2: bulk-update both PAN tables via unnest
+      let totalUpdatedOnboarding = 0;
+      let totalUpdatedProfile = 0;
+
+      if (updatePayload.length > 0) {
+        const bindParams = [
+          updatePayload.map((r) => r.candidateId), // $1 int[]
+          updatePayload.map((r) => r.panNumber), // $2 text[]
+        ];
+
+        const sqlOnboarding = `
+          UPDATE cs_in.pan_master_onboarding AS t
+          SET pan_number = v.pan_number
+          FROM unnest($1::int[], $2::text[])
+            AS v(candidate_id, pan_number)
+          WHERE t.candidate_id = v.candidate_id
+        `;
+        const [, metaOn] = await sequelize.query(sqlOnboarding, {
+          bind: bindParams,
+        });
+        totalUpdatedOnboarding = metaOn?.rowCount ?? 0;
+
+        const sqlProfile = `
+          UPDATE cs_in.pan_master_profile AS t
+          SET pan_number = v.pan_number
+          FROM unnest($1::int[], $2::text[])
+            AS v(candidate_id, pan_number)
+          WHERE t.candidate_id = v.candidate_id
+        `;
+        const [, metaPr] = await sequelize.query(sqlProfile, {
+          bind: bindParams,
+        });
+        totalUpdatedProfile = metaPr?.rowCount ?? 0;
+      }
+
+      const notFoundInDB = notResolved.filter((r) =>
+        r.reason.startsWith("email not found"),
+      );
+      const corpMismatch = notResolved.filter((r) =>
+        r.reason.startsWith("corporation mismatch"),
+      );
+      const noCandidate = notResolved.filter((r) =>
+        r.reason.startsWith("employee has no candidate_id"),
+      );
+
+      res.json({
+        message: "Employee PAN details update completed",
+        summary: {
+          totalRows: rows.length,
+          validRows: updatePayload.length,
+          updatedInOnboarding: totalUpdatedOnboarding,
+          updatedInProfile: totalUpdatedProfile,
+          notFoundInDB: notFoundInDB.length,
+          corporationMismatch: corpMismatch.length,
+          noCandidate: noCandidate.length,
+          skipped: skipped.length,
+        },
+        notFoundInDB,
+        corporationMismatchDetails: corpMismatch,
+        noCandidateDetails: noCandidate,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating employee PAN details:", err);
+      res
+        .status(500)
+        .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
+
+// POST /update-pf-uan-by-empid
+app.post(
+  "/update-employee-pf-uan-v2",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const rows = xlsx.utils.sheet_to_json(
+        workbook.Sheets[workbook.SheetNames[0]],
+      );
+
+      const inputPayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const empId = parseInt(row["emp_id"]);
+        const pfId = row["pf_id"]?.toString().trim() || null;
+        const uan = row["uan"]?.toString().trim() || null;
+
+        if (isNaN(empId) || (!pfId && !uan)) {
+          skipped.push({
+            empId,
+            reason: isNaN(empId)
+              ? "Missing or invalid emp_id"
+              : "Both pf_id and uan are empty",
+          });
+          continue;
+        }
+        inputPayload.push({ empId, pfId, uan });
+      }
+
+      if (inputPayload.length === 0)
+        return res.json({
+          message: "No valid rows to process",
+          summary: { totalRows: rows.length, skipped: skipped.length },
+          skippedDetails: skipped,
+        });
+
+      const allEmpIds = inputPayload.map((r) => r.empId);
+      const employees = await Employee.findAll({
+        where: { employee_id: { [Op.in]: allEmpIds } },
+        attributes: ["employee_id", "candidate_id"],
+        raw: true,
+      });
+
+      const empMap = new Map(
+        employees.map((e) => [e.employee_id, e.candidate_id]),
+      );
+
+      const updatePayload = [];
+      const notFound = [];
+      for (const r of inputPayload) {
+        const candidateId = empMap.get(r.empId);
+        if (!candidateId) {
+          notFound.push({ empId: r.empId, reason: "emp_id not found in DB" });
+          continue;
+        }
+        updatePayload.push({ ...r, candidateId });
+      }
+
+      const CHUNK_SIZE = 1000;
+      let totalUpdatedOnboarding = 0,
+        totalUpdatedProfile = 0;
+
+      for (let i = 0; i < updatePayload.length; i += CHUNK_SIZE) {
+        const chunk = updatePayload.slice(i, i + CHUNK_SIZE);
+        const values = chunk
+          .map(
+            (_, idx) =>
+              `($${idx * 3 + 1}::int, $${idx * 3 + 2}, $${idx * 3 + 3})`,
+          )
+          .join(", ");
+        const params = chunk.flatMap((r) => [r.candidateId, r.pfId, r.uan]);
+
+        const [, metaOn] = await sequelize.query(
+          `UPDATE cs_in.pf_master_onboarding AS t SET pf_id = v.pf_id, uan = v.uan
+         FROM (VALUES ${values}) AS v(candidate_id, pf_id, uan) WHERE t.candidate_id = v.candidate_id`,
+          { bind: params },
+        );
+        totalUpdatedOnboarding += metaOn?.rowCount ?? 0;
+
+        const [, metaPr] = await sequelize.query(
+          `UPDATE cs_in.pf_master_profile AS t SET pf_id = v.pf_id, uan = v.uan
+         FROM (VALUES ${values}) AS v(candidate_id, pf_id, uan) WHERE t.candidate_id = v.candidate_id`,
+          { bind: params },
+        );
+        totalUpdatedProfile += metaPr?.rowCount ?? 0;
+      }
+
+      res.json({
+        message: "PF/UAN update completed",
+        summary: {
+          totalRows: rows.length,
+          validRows: updatePayload.length,
+          updatedInOnboarding: totalUpdatedOnboarding,
+          updatedInProfile: totalUpdatedProfile,
+          notFound: notFound.length,
+          skipped: skipped.length,
+        },
+        notFoundDetails: notFound,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating PF/UAN:", err);
+      res
+        .status(500)
+        .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
+
+// POST /update-bank-details-by-empid
+app.post(
+  "/update-employee-bank-details-v2",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const rows = xlsx.utils.sheet_to_json(
+        workbook.Sheets[workbook.SheetNames[0]],
+      );
+
+      const inputPayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const empId = parseInt(row["emp_id"]);
+        const bankAccountNumber =
+          row["bank_account_number"]?.toString().trim() || null;
+        const ifscCode = row["ifsc_code"]?.toString().trim() || null;
+        const bankName = row["bank_name"]?.toString().trim() || null;
+
+        if (isNaN(empId) || (!bankAccountNumber && !ifscCode && !bankName)) {
+          skipped.push({
+            empId,
+            reason: isNaN(empId)
+              ? "Missing or invalid emp_id"
+              : "All bank fields are empty",
+          });
+          continue;
+        }
+        inputPayload.push({ empId, bankAccountNumber, ifscCode, bankName });
+      }
+
+      if (inputPayload.length === 0)
+        return res.json({
+          message: "No valid rows to process",
+          summary: { totalRows: rows.length, skipped: skipped.length },
+          skippedDetails: skipped,
+        });
+
+      const allEmpIds = inputPayload.map((r) => r.empId);
+      const employees = await Employee.findAll({
+        where: { employee_id: { [Op.in]: allEmpIds } },
+        attributes: ["employee_id", "candidate_id"],
+        raw: true,
+      });
+
+      const empMap = new Map(
+        employees.map((e) => [e.employee_id, e.candidate_id]),
+      );
+
+      const updatePayload = [];
+      const notFound = [];
+      for (const r of inputPayload) {
+        const candidateId = empMap.get(r.empId);
+        if (!candidateId) {
+          notFound.push({ empId: r.empId, reason: "emp_id not found in DB" });
+          continue;
+        }
+        updatePayload.push({ ...r, candidateId });
+      }
+
+      let totalUpdatedOnboarding = 0,
+        totalUpdatedProfile = 0;
+      if (updatePayload.length > 0) {
+        const bindParams = [
+          updatePayload.map((r) => r.candidateId),
+          updatePayload.map((r) => r.bankAccountNumber),
+          updatePayload.map((r) => r.ifscCode),
+          updatePayload.map((r) => r.bankName),
+        ];
+        const sql = (table) => `
+        UPDATE cs_in.${table} AS t
+        SET bank_account_number = v.bank_account_number, bank_ifsc_code = v.bank_ifsc_code, bank_name = v.bank_name
+        FROM unnest($1::int[], $2::text[], $3::text[], $4::text[]) AS v(candidate_id, bank_account_number, bank_ifsc_code, bank_name)
+        WHERE t.candidate_id = v.candidate_id`;
+
+        const [, metaOn] = await sequelize.query(
+          sql("bank_master_onboarding"),
+          { bind: bindParams },
+        );
+        totalUpdatedOnboarding = metaOn?.rowCount ?? 0;
+        const [, metaPr] = await sequelize.query(sql("bank_master_profile"), {
+          bind: bindParams,
+        });
+        totalUpdatedProfile = metaPr?.rowCount ?? 0;
+      }
+
+      res.json({
+        message: "Bank details update completed",
+        summary: {
+          totalRows: rows.length,
+          validRows: updatePayload.length,
+          updatedInOnboarding: totalUpdatedOnboarding,
+          updatedInProfile: totalUpdatedProfile,
+          notFound: notFound.length,
+          skipped: skipped.length,
+        },
+        notFoundDetails: notFound,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating bank details:", err);
+      res
+        .status(500)
+        .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
+
+// POST /update-employee-bank-details-v3
+// Excel columns: employee_code, corporation_id, legal_entity_id, bank_account_number, ifsc_code, bank_name, branch_name
+app.post(
+  "/update-employee-bank-details-v3",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const rows = xlsx.utils.sheet_to_json(
+        workbook.Sheets[workbook.SheetNames[0]],
+      );
+
+      const inputPayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const employeeCode = row["employee_code"]?.toString().trim();
+        const corporationId = parseInt(row["corporation_id"]);
+        const legalEntityId = parseInt(row["legal_entity_id"]);
+        const bankAccountNumber =
+          row["bank_account_number"]?.toString().trim() || null;
+        const ifscCode = row["ifsc_code"]?.toString().trim() || null;
+        const bankName = row["bank_name"]?.toString().trim() || null;
+        const bankBranch = row["branch_name"]?.toString().trim() || null;
+
+        if (!employeeCode || isNaN(corporationId) || isNaN(legalEntityId)) {
+          skipped.push({
+            employeeCode,
+            reason: "Missing employee_code / corporation_id / legal_entity_id",
+          });
+          continue;
+        }
+        if (!bankAccountNumber && !ifscCode && !bankName && !bankBranch) {
+          skipped.push({ employeeCode, reason: "All bank fields are empty" });
+          continue;
+        }
+        inputPayload.push({
+          employeeCode,
+          corporationId,
+          legalEntityId,
+          bankAccountNumber,
+          ifscCode,
+          bankName,
+          bankBranch,
+        });
+      }
+
+      if (inputPayload.length === 0)
+        return res.json({
+          message: "No valid rows to process",
+          summary: { totalRows: rows.length, skipped: skipped.length },
+          skippedDetails: skipped,
+        });
+
+      const allCodes = inputPayload.map((r) => r.employeeCode);
+      const employees = await Employee.findAll({
+        where: { employee_code: { [Op.in]: allCodes } },
+        attributes: [
+          "employee_code",
+          "corporation_id",
+          "legal_entity_id",
+          "candidate_id",
+        ],
+        raw: true,
+      });
+
+      const empMap = new Map(
+        employees.map((e) => [
+          `${e.employee_code}_${e.corporation_id}_${e.legal_entity_id}`,
+          e.candidate_id,
+        ]),
+      );
+
+      const updatePayload = [];
+      const notFound = [];
+      for (const r of inputPayload) {
+        const key = `${r.employeeCode}_${r.corporationId}_${r.legalEntityId}`;
+        const candidateId = empMap.get(key);
+        if (!candidateId) {
+          const codeExists = employees.find(
+            (e) => e.employee_code === r.employeeCode,
+          );
+          notFound.push({
+            employeeCode: r.employeeCode,
+            reason: codeExists
+              ? `corp/legal mismatch — DB has corporation_id:${codeExists.corporation_id} legal_entity_id:${codeExists.legal_entity_id}`
+              : "employee_code not found in DB",
+          });
+          continue;
+        }
+        updatePayload.push({ ...r, candidateId });
+      }
+
+      let totalUpdatedOnboarding = 0,
+        totalUpdatedProfile = 0;
+      if (updatePayload.length > 0) {
+        const bindParams = [
+          updatePayload.map((r) => r.candidateId),
+          updatePayload.map((r) => r.bankAccountNumber),
+          updatePayload.map((r) => r.ifscCode),
+          updatePayload.map((r) => r.bankName),
+          updatePayload.map((r) => r.bankBranch),
+        ];
+        const sql = (table) => `
+        UPDATE cs_in.${table} AS t
+        SET bank_account_number = v.bank_account_number, bank_ifsc_code = v.bank_ifsc_code, bank_name = v.bank_name, bank_branch = v.bank_branch
+        FROM unnest($1::int[], $2::text[], $3::text[], $4::text[], $5::text[]) AS v(candidate_id, bank_account_number, bank_ifsc_code, bank_name, bank_branch)
+        WHERE t.candidate_id = v.candidate_id`;
+
+        const [, metaOn] = await sequelize.query(
+          sql("bank_master_onboarding"),
+          { bind: bindParams },
+        );
+        totalUpdatedOnboarding = metaOn?.rowCount ?? 0;
+        const [, metaPr] = await sequelize.query(sql("bank_master_profile"), {
+          bind: bindParams,
+        });
+        totalUpdatedProfile = metaPr?.rowCount ?? 0;
+      }
+
+      res.json({
+        message: "Bank details update completed",
+        summary: {
+          totalRows: rows.length,
+          validRows: updatePayload.length,
+          updatedInOnboarding: totalUpdatedOnboarding,
+          updatedInProfile: totalUpdatedProfile,
+          notFound: notFound.length,
+          skipped: skipped.length,
+        },
+        notFoundDetails: notFound,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating bank details v3:", err);
+      res
+        .status(500)
+        .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
+
+// POST /update-pan-by-empid
+app.post(
+  "/update-employee-pan-details-v2",
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+      const rows = xlsx.utils.sheet_to_json(
+        workbook.Sheets[workbook.SheetNames[0]],
+      );
+
+      const inputPayload = [];
+      const skipped = [];
+
+      for (const row of rows) {
+        const empId = parseInt(row["emp_id"]);
+        const panNumber = row["pan_number"]?.toString().trim() || null;
+
+        if (isNaN(empId) || !panNumber) {
+          skipped.push({
+            empId,
+            reason: isNaN(empId)
+              ? "Missing or invalid emp_id"
+              : "pan_number is empty",
+          });
+          continue;
+        }
+        inputPayload.push({ empId, panNumber });
+      }
+
+      if (inputPayload.length === 0)
+        return res.json({
+          message: "No valid rows to process",
+          summary: { totalRows: rows.length, skipped: skipped.length },
+          skippedDetails: skipped,
+        });
+
+      const allEmpIds = inputPayload.map((r) => r.empId);
+      const employees = await Employee.findAll({
+        where: { employee_id: { [Op.in]: allEmpIds } },
+        attributes: ["employee_id", "candidate_id"],
+        raw: true,
+      });
+
+      const empMap = new Map(
+        employees.map((e) => [e.employee_id, e.candidate_id]),
+      );
+
+      const updatePayload = [];
+      const notFound = [];
+      for (const r of inputPayload) {
+        const candidateId = empMap.get(r.empId);
+        if (!candidateId) {
+          notFound.push({ empId: r.empId, reason: "emp_id not found in DB" });
+          continue;
+        }
+        updatePayload.push({ ...r, candidateId });
+      }
+
+      let totalUpdatedOnboarding = 0,
+        totalUpdatedProfile = 0;
+      if (updatePayload.length > 0) {
+        const bindParams = [
+          updatePayload.map((r) => r.candidateId),
+          updatePayload.map((r) => r.panNumber),
+        ];
+        const sql = (table) => `
+        UPDATE cs_in.${table} AS t SET pan_number = v.pan_number
+        FROM unnest($1::int[], $2::text[]) AS v(candidate_id, pan_number)
+        WHERE t.candidate_id = v.candidate_id`;
+
+        const [, metaOn] = await sequelize.query(sql("pan_master_onboarding"), {
+          bind: bindParams,
+        });
+        totalUpdatedOnboarding = metaOn?.rowCount ?? 0;
+        const [, metaPr] = await sequelize.query(sql("pan_master_profile"), {
+          bind: bindParams,
+        });
+        totalUpdatedProfile = metaPr?.rowCount ?? 0;
+      }
+
+      res.json({
+        message: "PAN update completed",
+        summary: {
+          totalRows: rows.length,
+          validRows: updatePayload.length,
+          updatedInOnboarding: totalUpdatedOnboarding,
+          updatedInProfile: totalUpdatedProfile,
+          notFound: notFound.length,
+          skipped: skipped.length,
+        },
+        notFoundDetails: notFound,
+        skippedDetails: skipped,
+      });
+    } catch (err) {
+      console.error("Error updating PAN:", err);
+      res
+        .status(500)
+        .json({ error: "Something went wrong", details: err.message });
+    }
+  },
+);
+
+app.post("/send-esic-bulk-email", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+    const rows = xlsx.utils.sheet_to_json(
+      workbook.Sheets[workbook.SheetNames[0]],
+    );
+
+    const empIds = rows
+      .map((r) => parseInt(r["employee_id"]))
+      .filter((id) => !isNaN(id));
+
+    if (empIds.length === 0)
+      return res
+        .status(400)
+        .json({ error: "No valid employee_id found in file" });
+
+    const employees = await Employee.findAll({
+      where: { employee_id: { [Op.in]: empIds } },
+      attributes: ["employee_id", "first_name", "work_email", "personal_email"],
+      raw: true,
+    });
+
+    const empMap = new Map(employees.map((e) => [e.employee_id, e]));
+
+    // Pre-read and base64-encode all attachments once — reused for every email
+    const ATTACHMENTS = [
+      "./Aadhaar_Seeding.pdf",
+      "./ESIC_Guidelines.pdf",
+      "./ESIC_Health_Connect_APP_Manual_IP.pdf",
+      "./Standard_Requirement_Updation_ESIC_Card.pdf",
+    ].map((filePath) => ({
+      filename: path.basename(filePath),
+      content: fs.readFileSync(path.resolve(filePath)).toString("base64"),
+      mimeType: "application/pdf",
+    }));
+
+    const SUBJECT = "ESIC Health Connect";
+    const HTML_BODY = `<p>Dear Employee,</p><p>This is to inform you that a ESIC Health Connect Document has been published in Veytan. Kindly Check</p><div>Best Regards,</div><div>Human Resources</div><div>IDFC FIRST Bharat Limited</div>`;
+
+    // Respond immediately
+    res.json({
+      message: "ESIC bulk email process started",
+      summary: { totalRows: rows.length, validEmployeeIds: empIds.length },
+    });
+
+    // Background processing — does not block the response
+    const sent = [],
+      failed = [],
+      notFound = [];
+    for (const empId of empIds) {
+      const emp = empMap.get(empId);
+      if (!emp) {
+        notFound.push(empId);
+        continue;
+      }
+
+      const toEmail = emp.personal_email?.trim() || emp.work_email?.trim();
+      if (!toEmail) {
+        failed.push({ empId, reason: "no email address on record" });
+        continue;
+      }
+
+      try {
+        await sendRawEmail({
+          to: [toEmail],
+          replyTo: ["apps@veytan.com"],
+          subject: SUBJECT,
+          htmlBody: HTML_BODY,
+          attachments: ATTACHMENTS,
+        });
+        sent.push(empId);
+        console.log(
+          `[${sent.length}/${empIds.length}] Sent empId:${empId} → ${toEmail}`,
+        );
+        //await sleep(25);
+      } catch (err) {
+        console.error(`Failed empId:${empId} → ${toEmail}: ${err.message}`);
+        failed.push({ empId, reason: err.message });
+      }
+    }
+    console.log(
+      `ESIC email job done — sent:${sent.length} failed:${failed.length} notFound:${notFound.length}`,
+    );
+  } catch (err) {
+    console.error("Error sending ESIC bulk email:", err);
+    res
+      .status(500)
+      .json({ error: "Something went wrong", details: err.message });
+  }
+});
+
+// POST /upload-other-documents-zip
+// ZIP structure: folders named "Name-FSCode/" containing documents, e.g. "Chandravadan-FS50107/doc.pdf"
+// Employee code extracted from folder name: last segment after "-", strip leading letters → "50107"
+const DOCUMENT_TYPE_ID = 71;
+const S3_UPLOAD_CONCURRENCY = 15;
+
+// Extract employee_code from a label like "Chandravadan-FS50107" → "50107"
+// Matches digits after "-" followed by letters (e.g. -FS, -EMP)
+function extractEmployeeCode(label) {
+  const match = label.match(/-[A-Za-z]+(\d+)/);
+  return match ? match[1] : null;
+}
+
+app.post(
+  "/upload-other-documents-zip",
+  upload.single("file"),
+  async (req, res) => {
+    if (!req.file)
+      return res.status(400).json({ error: "No ZIP file uploaded" });
+
+    const createdBy = parseInt(req.body?.created_by) || null;
+    const corporationId = 3;
+    const legalEntityId = 1001;
+
+    if (isNaN(corporationId) || isNaN(legalEntityId)) {
+      return res
+        .status(400)
+        .json({ error: "corporation_id and legal_entity_id are required" });
+    }
+
+    const outerDirectory = await unzipper.Open.buffer(req.file.buffer);
+    const allEntries = outerDirectory.files.filter(
+      (e) => !e.path.endsWith("/"),
+    );
+    const innerZipEntries = allEntries.filter(
+      (e) => path.extname(e.path).toLowerCase() === ".zip",
+    );
+
+    const entryMeta = [];
+
+    if (innerZipEntries.length > 0) {
+      // BULK mode: outer ZIP contains per-employee inner ZIPs
+      // master.zip → Chandravadan-FS50107.zip → doc1.pdf, doc2.pdf
+      for (const innerZipEntry of innerZipEntries) {
+        const label = path.basename(innerZipEntry.path, ".zip"); // "Chandravadan-FS50107"
+        const employeeCode = extractEmployeeCode(label);
+        const innerBuffer = await innerZipEntry.buffer();
+        const innerDir = await unzipper.Open.buffer(innerBuffer);
+        const innerFiles = innerDir.files.filter((e) => !e.path.endsWith("/"));
+        for (const fileEntry of innerFiles) {
+          entryMeta.push({ entry: fileEntry, topSegment: label, employeeCode });
+        }
+      }
+    } else {
+      // SINGLE mode: ZIP filename is the employee label, all files inside belong to them
+      // Chandravadan-FS50107.zip → doc1.pdf, doc2.pdf
+      const label = path.basename(req.file.originalname, ".zip");
+      const employeeCode = extractEmployeeCode(label);
+      for (const fileEntry of allEntries) {
+        entryMeta.push({ entry: fileEntry, topSegment: label, employeeCode });
+      }
+    }
+
+    // Batch employee lookup — one query for all unique codes
+    const uniqueCodes = [
+      ...new Set(entryMeta.map((m) => m.employeeCode).filter(Boolean)),
+    ];
+    const employees = await Employee.findAll({
+      where: {
+        employee_code: { [Op.in]: uniqueCodes },
+        corporation_id: corporationId,
+        legal_entity_id: legalEntityId,
+      },
+      attributes: ["employee_code", "candidate_id"],
+      raw: true,
+    });
+    const empMap = new Map(
+      employees.map((e) => [e.employee_code, e.candidate_id]),
+    );
+
+    const recognizedFiles = entryMeta.filter((m) => empMap.has(m.employeeCode));
+    const skipped = entryMeta
+      .filter((m) => !m.employeeCode || !empMap.has(m.employeeCode))
+      .map((m) => ({
+        file: m.entry.path,
+        reason: m.employeeCode
+          ? `employee_code '${m.employeeCode}' not found`
+          : "could not parse employee_code",
+      }));
+
+    // Respond immediately
+    res.json({
+      message: "ZIP document upload started in background",
+      summary: {
+        totalFiles: entryMeta.length,
+        recognizedEmployees: uniqueCodes.length,
+        matchedEmployees: employees.length,
+        filesToProcess: recognizedFiles.length,
+        skipped: skipped.length,
+      },
+      skippedDetails: skipped,
+    });
+
+    // Background: upload to S3 in batches, then bulk upsert into DB
+    (async () => {
+      console.log(`[zip-upload] starting — recognizedFiles:${recognizedFiles.length} skipped:${skipped.length}`);
+
+      if (recognizedFiles.length === 0) {
+        console.log("[zip-upload] no files to process — check employee code extraction and DB lookup");
+        return;
+      }
+
+      const uploaded = [], failed = [];
+      const filesByCandidateId = new Map();
+
+      for (let i = 0; i < recognizedFiles.length; i += S3_UPLOAD_CONCURRENCY) {
+        const batch = recognizedFiles.slice(i, i + S3_UPLOAD_CONCURRENCY);
+        await Promise.all(
+          batch.map(async ({ entry, employeeCode }) => {
+            const filename = path.basename(entry.path);
+            const ext = path.extname(filename);
+            const candidateId = empMap.get(employeeCode);
+            console.log(`[zip-upload] processing file:${filename} emp:${employeeCode} candidateId:${candidateId}`);
+            try {
+              const buffer = await entry.buffer();
+              const fileId = uuidv4();
+              const s3Key = `Employee_Document/Personal_Documents/Other_Documents/${fileId}${ext}`;
+              const mimeType = mime.lookup(filename) || "application/octet-stream";
+              const fileSizeBytes = buffer.length;
+
+              const fileUrl = await uploadToS3(buffer, s3Key, mimeType);
+              const presignedUrl = await getPresignedURL(s3Key);
+              console.log(`[zip-upload] S3 uploaded: ${s3Key}`);
+
+              const fileDetails = {
+                file_id: fileId,
+                file_url: fileUrl,
+                file_path: s3Key,
+                file_name: filename,
+                file_size: fileSizeBytes / 1024,
+                file_size_in_bytes: fileSizeBytes,
+                file_type: mimeType,
+                presigned_url: presignedUrl,
+              };
+
+              if (!filesByCandidateId.has(candidateId)) filesByCandidateId.set(candidateId, []);
+              filesByCandidateId.get(candidateId).push(fileDetails);
+              uploaded.push({ file: entry.path, employeeCode, candidateId });
+            } catch (err) {
+              console.error(`[zip-upload] S3 failed file:${filename} — ${err.message}`);
+              failed.push({ file: entry.path, employeeCode, reason: err.message });
+            }
+          }),
+        );
+      }
+
+      console.log(`[zip-upload] S3 done — uploaded:${uploaded.length} failed:${failed.length}`);
+
+      // Bulk DB upsert — load all existing records for affected candidates in one query
+      const allCandidateIds = [...filesByCandidateId.keys()];
+      console.log(`[zip-upload] DB upsert for ${allCandidateIds.length} candidates`);
+      for (const DocModel of [
+        EmployeeOtherDocuments,
+        EmployeeOtherDocumentsProfile,
+      ]) {
+        const existingRecords = await DocModel.findAll({
+          where: {
+            candidate_id: { [Op.in]: allCandidateIds },
+            document_type_id: DOCUMENT_TYPE_ID,
+          },
+          raw: true,
+        });
+        const existingMap = new Map(
+          existingRecords.map((r) => [r.candidate_id, r]),
+        );
+
+        const toCreate = [],
+          toUpdate = [];
+        for (const [candidateId, newFiles] of filesByCandidateId) {
+          const existing = existingMap.get(candidateId);
+          if (existing) {
+            const merged = [
+              ...(Array.isArray(existing.file_url) ? existing.file_url : []),
+              ...newFiles,
+            ];
+            toUpdate.push({ id: existing.id, file_url: merged });
+          } else {
+            toCreate.push({
+              candidate_id: candidateId,
+              document_type_id: DOCUMENT_TYPE_ID,
+              file_url: newFiles,
+              created_by: createdBy,
+              updated_by: createdBy,
+              is_completed: false,
+            });
+          }
+        }
+
+        if (toCreate.length > 0) await DocModel.bulkCreate(toCreate);
+        for (const r of toUpdate) {
+          await DocModel.update(
+            { file_url: r.file_url, updated_by: createdBy },
+            { where: { id: r.id } },
+          );
+        }
+      }
+
+      console.log(
+        `[upload-other-documents-zip] done — uploaded:${uploaded.length} failed:${failed.length} skipped:${skipped.length}`,
+      );
+    })().catch((err) =>
+      console.error(
+        "[upload-other-documents-zip] background error:",
+        err.message,
+      ),
+    );
   },
 );
 
