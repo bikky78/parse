@@ -1,11 +1,16 @@
 // db.js
 const { Sequelize, DataTypes } = require("sequelize");
 
-const sequelize = new Sequelize("prod2_hcm", "postgres", "1L7DSUhUF5Irg0GwC29)BYZvj~!a", {
-  host: "stagehcm.cluster-ctq0cwagah71.ap-south-1.rds.amazonaws.com",
-  dialect: "postgres",
-  logging: false,
-});
+const sequelize = new Sequelize(
+  "prod2_hcm",
+  "superadmin",
+  "SuperAdmin@Staging2024!",
+  {
+    host: "stagehcm.cluster-ctq0cwagah71.ap-south-1.rds.amazonaws.com",
+    dialect: "postgres",
+    logging: false,
+  },
+);
 
 const User = sequelize.define(
   "User",
@@ -19,7 +24,7 @@ const User = sequelize.define(
     email: DataTypes.STRING,
     mobile_number: DataTypes.STRING,
     is_active: DataTypes.BOOLEAN,
-    is_first_time_login:DataTypes.BOOLEAN,
+    is_first_time_login: DataTypes.BOOLEAN,
     is_external: DataTypes.BOOLEAN,
     corporation_id: DataTypes.NUMBER,
     designation: DataTypes.STRING,
@@ -32,7 +37,7 @@ const User = sequelize.define(
     schema: "user_management",
     tableName: "user",
     timestamps: true,
-  }
+  },
 );
 
 const Employee = sequelize.define(
@@ -60,7 +65,7 @@ const Employee = sequelize.define(
     schema: "employee",
     tableName: "employee",
     timestamps: true,
-  }
+  },
 );
 
 const PFOnboarding = sequelize.define(
@@ -72,13 +77,13 @@ const PFOnboarding = sequelize.define(
       autoIncrement: true,
     },
     candidate_id: DataTypes.INTEGER,
-    esic_documents: { type: DataTypes.ARRAY(DataTypes.JSONB) }
+    esic_documents: { type: DataTypes.ARRAY(DataTypes.JSONB) },
   },
   {
     schema: "cs_in",
     tableName: "pf_master_onboarding",
     timestamps: true,
-  }
+  },
 );
 
 const PFProfile = sequelize.define(
@@ -90,15 +95,14 @@ const PFProfile = sequelize.define(
       autoIncrement: true,
     },
     candidate_id: DataTypes.INTEGER,
-    esic_documents: { type: DataTypes.ARRAY(DataTypes.JSONB) }
+    esic_documents: { type: DataTypes.ARRAY(DataTypes.JSONB) },
   },
   {
     schema: "cs_in",
     tableName: "pf_master_profile",
     timestamps: true,
-  }
+  },
 );
-
 
 const EmailLogs = sequelize.define(
   "EmailLogs",
@@ -123,13 +127,13 @@ const EmailLogs = sequelize.define(
     status: {
       type: DataTypes.STRING,
       allowNull: true,
-    }
+    },
   },
   {
     tableName: "email_logs",
     schema: "audit",
     timestamps: true,
-  }
+  },
 );
 
 const CorporationMaster = sequelize.define(
@@ -142,12 +146,12 @@ const CorporationMaster = sequelize.define(
     },
     full_name: {
       type: DataTypes.STRING,
-    }, 
+    },
     short_name: {
-      type: DataTypes.STRING
+      type: DataTypes.STRING,
     },
     description: {
-      type: DataTypes.STRING
+      type: DataTypes.STRING,
     },
     established_on: {
       type: DataTypes.DATE,
@@ -230,7 +234,7 @@ const CorporationMaster = sequelize.define(
     tableName: "corporation_master",
     schema: "ws_global",
     timestamps: true,
-  }
+  },
 );
 
 const LegalEntityMaster = sequelize.define(
@@ -255,7 +259,7 @@ const LegalEntityMaster = sequelize.define(
       type: DataTypes.ARRAY(DataTypes.JSONB),
     },
     email_address: DataTypes.STRING,
-  
+
     date_of_incorporation: DataTypes.DATE,
     registered_address: DataTypes.STRING,
     corporate_address: DataTypes.STRING,
@@ -299,7 +303,7 @@ const LegalEntityMaster = sequelize.define(
   {
     tableName: "legal_entity_master",
     schema: "global",
-  }
+  },
 );
 
 const DepartmentMaster = sequelize.define(
@@ -331,7 +335,7 @@ const DepartmentMaster = sequelize.define(
     tableName: "department_master",
     schema: "employee",
     timestamps: true,
-  }
+  },
 );
 
 const DesignationMaster = sequelize.define(
@@ -364,7 +368,7 @@ const DesignationMaster = sequelize.define(
     tableName: "designation_master",
     schema: "employee",
     timestamps: true,
-  }
+  },
 );
 
 const TaskMasterOnboarding = sequelize.define(
@@ -444,7 +448,7 @@ const TaskMasterOnboarding = sequelize.define(
     tableName: "task_master_onboarding",
     schema: "main",
     timestamps: false,
-  }
+  },
 );
 
 const EmployeeTasksOnboarding = sequelize.define(
@@ -502,7 +506,7 @@ const EmployeeTasksOnboarding = sequelize.define(
     tableName: "employee_task_config",
     schema: "employee",
     timestamps: true,
-  }
+  },
 );
 
 const TaskEntitiesConfig = sequelize.define(
@@ -538,7 +542,7 @@ const TaskEntitiesConfig = sequelize.define(
     tableName: "task_entities_config",
     schema: "main",
     timestamps: true,
-  }
+  },
 );
 
 const LeaveAccrual = sequelize.define(
@@ -551,14 +555,14 @@ const LeaveAccrual = sequelize.define(
     },
     corporation_id: {
       type: DataTypes.INTEGER,
-      allowNull: false
+      allowNull: false,
     },
     legal_entity_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
     },
     sub_entity_id: {
-      type: DataTypes.INTEGER
+      type: DataTypes.INTEGER,
     },
     employee_id: {
       type: DataTypes.INTEGER,
@@ -605,11 +609,11 @@ const LeaveAccrual = sequelize.define(
     tableName: "leave_accrual",
     schema: "leave_management",
     timestamps: true,
-  }
+  },
 );
 
 const EmployeeExitDetails = sequelize.define(
-  'Employee_Exit_Details',
+  "Employee_Exit_Details",
   {
     id: {
       type: DataTypes.INTEGER,
@@ -667,7 +671,7 @@ const EmployeeExitDetails = sequelize.define(
     },
 
     status: {
-     type: DataTypes.STRING,
+      type: DataTypes.STRING,
     },
 
     exit_group_id: {
@@ -693,13 +697,13 @@ const EmployeeExitDetails = sequelize.define(
     bulk_history_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      comment: 'Reference to bulk operation that created this exit request',
+      comment: "Reference to bulk operation that created this exit request",
     },
 
     exit_initiated_date: {
       type: DataTypes.DATE,
       allowNull: true,
-      comment: 'Date when the exit process was initiated',
+      comment: "Date when the exit process was initiated",
     },
 
     // withdrawal_reason: {
@@ -721,12 +725,11 @@ const EmployeeExitDetails = sequelize.define(
     // },
   },
   {
-    tableName: 'employee_exit_details',
-    schema: 'exit_management',
+    tableName: "employee_exit_details",
+    schema: "exit_management",
     timestamps: true,
-  }
+  },
 );
-
 
 const CandidateCustomFormConfig = sequelize.define(
   "CandidateCustomFormConfig",
@@ -761,7 +764,7 @@ const CandidateCustomFormConfig = sequelize.define(
     tableName: "candidate_custom_form_config",
     schema: "custom_fields",
     timestamps: true,
-  }
+  },
 );
 
 const EmployeeOtherDocuments = sequelize.define(
@@ -777,7 +780,11 @@ const EmployeeOtherDocuments = sequelize.define(
     updated_by: { type: DataTypes.INTEGER, allowNull: true },
     is_completed: { type: DataTypes.BOOLEAN, allowNull: true },
   },
-  { tableName: "employee_other_documents", schema: "employee", timestamps: true }
+  {
+    tableName: "employee_other_documents",
+    schema: "employee",
+    timestamps: true,
+  },
 );
 
 const EmployeeOtherDocumentsProfile = sequelize.define(
@@ -793,7 +800,29 @@ const EmployeeOtherDocumentsProfile = sequelize.define(
     updated_by: { type: DataTypes.INTEGER, allowNull: true },
     is_completed: { type: DataTypes.BOOLEAN, allowNull: true },
   },
-  { tableName: "employee_other_documents_profile", schema: "employee", timestamps: true }
+  {
+    tableName: "employee_other_documents_profile",
+    schema: "employee",
+    timestamps: true,
+  },
 );
 
-module.exports = { sequelize, User, Employee, PFOnboarding, PFProfile, EmployeeTasksOnboarding, EmailLogs, LegalEntityMaster, TaskEntitiesConfig, TaskMasterOnboarding, LeaveAccrual, EmployeeExitDetails, CandidateCustomFormConfig, DepartmentMaster, DesignationMaster, EmployeeOtherDocuments, EmployeeOtherDocumentsProfile };
+module.exports = {
+  sequelize,
+  User,
+  Employee,
+  PFOnboarding,
+  PFProfile,
+  EmployeeTasksOnboarding,
+  EmailLogs,
+  LegalEntityMaster,
+  TaskEntitiesConfig,
+  TaskMasterOnboarding,
+  LeaveAccrual,
+  EmployeeExitDetails,
+  CandidateCustomFormConfig,
+  DepartmentMaster,
+  DesignationMaster,
+  EmployeeOtherDocuments,
+  EmployeeOtherDocumentsProfile,
+};
