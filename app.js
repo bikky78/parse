@@ -2060,7 +2060,12 @@ app.post(
               `($${idx * 4 + 1}::int, $${idx * 4 + 2}, $${idx * 4 + 3}, $${idx * 4 + 4})`,
           )
           .join(", ");
-        const params = chunk.flatMap((r) => [r.candidateId, r.pfId, r.uan, r.esicNumber]);
+        const params = chunk.flatMap((r) => [
+          r.candidateId,
+          r.pfId,
+          r.uan,
+          r.esicNumber,
+        ]);
 
         const [, metaOn] = await sequelize.query(
           `UPDATE cs_in.pf_master_onboarding AS t
@@ -2087,11 +2092,22 @@ app.post(
 
       // INSERT for candidates with no existing record in each table
       const allCandidateIds = updatePayload.map((r) => r.candidateId);
-      let totalInsertedOnboarding = 0, totalInsertedProfile = 0;
+      let totalInsertedOnboarding = 0,
+        totalInsertedProfile = 0;
 
       for (const [tableName, setInserted] of [
-        ["pf_master_onboarding", (n) => { totalInsertedOnboarding = n; }],
-        ["pf_master_profile",    (n) => { totalInsertedProfile = n; }],
+        [
+          "pf_master_onboarding",
+          (n) => {
+            totalInsertedOnboarding = n;
+          },
+        ],
+        [
+          "pf_master_profile",
+          (n) => {
+            totalInsertedProfile = n;
+          },
+        ],
       ]) {
         const [existingRows] = await sequelize.query(
           `SELECT candidate_id FROM cs_in.${tableName} WHERE candidate_id = ANY($1::int[])`,
@@ -2101,7 +2117,8 @@ app.post(
         // deduplicate by candidateId to prevent duplicate rows from same Excel
         const seenIds = new Set();
         const toInsert = updatePayload.filter((r) => {
-          if (existingSet.has(r.candidateId) || seenIds.has(r.candidateId)) return false;
+          if (existingSet.has(r.candidateId) || seenIds.has(r.candidateId))
+            return false;
           seenIds.add(r.candidateId);
           return true;
         });
@@ -2110,9 +2127,17 @@ app.post(
         for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
           const chunk = toInsert.slice(i, i + CHUNK_SIZE);
           const values = chunk
-            .map((_, idx) => `($${idx * 4 + 1}::int, $${idx * 4 + 2}, $${idx * 4 + 3}, $${idx * 4 + 4}, NOW(), NOW())`)
+            .map(
+              (_, idx) =>
+                `($${idx * 4 + 1}::int, $${idx * 4 + 2}, $${idx * 4 + 3}, $${idx * 4 + 4}, NOW(), NOW())`,
+            )
             .join(", ");
-          const params = chunk.flatMap((r) => [r.candidateId, r.pfId, r.uan, r.esicNumber]);
+          const params = chunk.flatMap((r) => [
+            r.candidateId,
+            r.pfId,
+            r.uan,
+            r.esicNumber,
+          ]);
           const [, meta] = await sequelize.query(
             `INSERT INTO cs_in.${tableName} (candidate_id, pf_id, uan, esic_number, "createdAt", "updatedAt") VALUES ${values}`,
             { bind: params },
@@ -2240,11 +2265,22 @@ app.post(
 
       // INSERT for candidates with no existing record in each table
       const allCandidateIds = updatePayload.map((r) => r.candidateId);
-      let totalInsertedOnboarding = 0, totalInsertedProfile = 0;
+      let totalInsertedOnboarding = 0,
+        totalInsertedProfile = 0;
 
       for (const [tableName, setInserted] of [
-        ["bank_master_onboarding", (n) => { totalInsertedOnboarding = n; }],
-        ["bank_master_profile",    (n) => { totalInsertedProfile = n; }],
+        [
+          "bank_master_onboarding",
+          (n) => {
+            totalInsertedOnboarding = n;
+          },
+        ],
+        [
+          "bank_master_profile",
+          (n) => {
+            totalInsertedProfile = n;
+          },
+        ],
       ]) {
         const [existingRows] = await sequelize.query(
           `SELECT candidate_id FROM cs_in.${tableName} WHERE candidate_id = ANY($1::int[])`,
@@ -2253,7 +2289,8 @@ app.post(
         const existingSet = new Set(existingRows.map((r) => r.candidate_id));
         const seenIds = new Set();
         const toInsert = updatePayload.filter((r) => {
-          if (existingSet.has(r.candidateId) || seenIds.has(r.candidateId)) return false;
+          if (existingSet.has(r.candidateId) || seenIds.has(r.candidateId))
+            return false;
           seenIds.add(r.candidateId);
           return true;
         });
@@ -2263,9 +2300,17 @@ app.post(
         for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
           const chunk = toInsert.slice(i, i + CHUNK_SIZE);
           const values = chunk
-            .map((_, idx) => `($${idx * 4 + 1}::int, $${idx * 4 + 2}, $${idx * 4 + 3}, $${idx * 4 + 4}, NOW(), NOW())`)
+            .map(
+              (_, idx) =>
+                `($${idx * 4 + 1}::int, $${idx * 4 + 2}, $${idx * 4 + 3}, $${idx * 4 + 4}, NOW(), NOW())`,
+            )
             .join(", ");
-          const params = chunk.flatMap((r) => [r.candidateId, r.bankAccountNumber, r.ifscCode, r.bankName]);
+          const params = chunk.flatMap((r) => [
+            r.candidateId,
+            r.bankAccountNumber,
+            r.ifscCode,
+            r.bankName,
+          ]);
           const [, meta] = await sequelize.query(
             `INSERT INTO cs_in.${tableName} (candidate_id, bank_account_number, bank_ifsc_code, bank_name, "createdAt", "updatedAt") VALUES ${values}`,
             { bind: params },
@@ -2528,11 +2573,22 @@ app.post(
 
       // INSERT for candidates with no existing record in each table
       const allCandidateIds = updatePayload.map((r) => r.candidateId);
-      let totalInsertedOnboarding = 0, totalInsertedProfile = 0;
+      let totalInsertedOnboarding = 0,
+        totalInsertedProfile = 0;
 
       for (const [tableName, setInserted] of [
-        ["pan_master_onboarding", (n) => { totalInsertedOnboarding = n; }],
-        ["pan_master_profile",    (n) => { totalInsertedProfile = n; }],
+        [
+          "pan_master_onboarding",
+          (n) => {
+            totalInsertedOnboarding = n;
+          },
+        ],
+        [
+          "pan_master_profile",
+          (n) => {
+            totalInsertedProfile = n;
+          },
+        ],
       ]) {
         const [existingRows] = await sequelize.query(
           `SELECT candidate_id FROM cs_in.${tableName} WHERE candidate_id = ANY($1::int[])`,
@@ -2541,7 +2597,8 @@ app.post(
         const existingSet = new Set(existingRows.map((r) => r.candidate_id));
         const seenIds = new Set();
         const toInsert = updatePayload.filter((r) => {
-          if (existingSet.has(r.candidateId) || seenIds.has(r.candidateId)) return false;
+          if (existingSet.has(r.candidateId) || seenIds.has(r.candidateId))
+            return false;
           seenIds.add(r.candidateId);
           return true;
         });
@@ -2551,7 +2608,10 @@ app.post(
         for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
           const chunk = toInsert.slice(i, i + CHUNK_SIZE);
           const values = chunk
-            .map((_, idx) => `($${idx * 2 + 1}::int, $${idx * 2 + 2}, NOW(), NOW())`)
+            .map(
+              (_, idx) =>
+                `($${idx * 2 + 1}::int, $${idx * 2 + 2}, NOW(), NOW())`,
+            )
             .join(", ");
           const params = chunk.flatMap((r) => [r.candidateId, r.panNumber]);
           const [, meta] = await sequelize.query(
@@ -2917,6 +2977,205 @@ app.post(
         "[upload-other-documents-zip] background error:",
         err.message,
       ),
+    );
+  },
+);
+
+// POST /upload-pan-documents-zip
+// ZIP contains files named like "1-UGYPS3450Q_Q4_2026-27.pdf"
+// Extracts PAN number via regex, looks up candidate_id from pan_master_onboarding
+// Uploads to S3 and upserts into employee_other_documents + employee_other_documents_profile
+// Body: document_type_id (required), created_by (optional)
+
+const PAN_REGEX = /[A-Z]{5}[0-9]{4}[A-Z]/;
+
+function extractPanNumber(filename) {
+  const match = path
+    .basename(filename, path.extname(filename))
+    .match(PAN_REGEX);
+  return match ? match[0] : null;
+}
+
+app.post(
+  "/upload-pan-documents-zip",
+  upload.single("file"),
+  async (req, res) => {
+    if (!req.file)
+      return res.status(400).json({ error: "No ZIP file uploaded" });
+
+    const documentTypeId = 71;
+    const createdBy = parseInt(req.body.created_by) || null;
+
+    if (isNaN(documentTypeId))
+      return res.status(400).json({ error: "document_type_id is required" });
+
+    // Parse ZIP — flat structure, no nested ZIPs
+    const directory = await unzipper.Open.buffer(req.file.buffer);
+    const allEntries = directory.files.filter((e) => !e.path.endsWith("/"));
+
+    // Extract PAN from each filename
+    const entryMeta = allEntries.map((entry) => ({
+      entry,
+      filename: path.basename(entry.path),
+      panNumber: extractPanNumber(entry.path),
+    }));
+
+    const invalidEntries = entryMeta.filter((m) => !m.panNumber);
+    const validEntries = entryMeta.filter((m) => m.panNumber);
+
+    // Batch lookup candidate_ids from pan_master_profile by pan_number
+    const uniquePans = [...new Set(validEntries.map((m) => m.panNumber))];
+    const [panRows] = await sequelize.query(
+      `SELECT pan_number, candidate_id FROM cs_in.pan_master_profile WHERE pan_number = ANY($1::text[])`,
+      { bind: [uniquePans] },
+    );
+    const panMap = new Map(panRows.map((r) => [r.pan_number, r.candidate_id]));
+
+    const recognizedEntries = validEntries.filter((m) =>
+      panMap.has(m.panNumber),
+    );
+    const skipped = [
+      ...invalidEntries.map((m) => ({
+        file: m.filename,
+        reason: "PAN number not found in filename",
+      })),
+      ...validEntries
+        .filter((m) => !panMap.has(m.panNumber))
+        .map((m) => ({
+          file: m.filename,
+          reason: `PAN '${m.panNumber}' not found in pan_master_profile — skipped`,
+        })),
+    ];
+
+    // Respond immediately
+    res.json({
+      message: "PAN document upload started in background",
+      summary: {
+        totalFiles: allEntries.length,
+        filesToProcess: recognizedEntries.length,
+        skipped: skipped.length,
+      },
+      skippedDetails: skipped,
+    });
+
+    // Background: upload to S3, then upsert into document tables
+    (async () => {
+      console.log(
+        `[pan-zip-upload] starting — files:${recognizedEntries.length} skipped:${skipped.length}`,
+      );
+
+      const uploaded = [],
+        failed = [];
+      const filesByCandidateId = new Map();
+
+      for (
+        let i = 0;
+        i < recognizedEntries.length;
+        i += S3_UPLOAD_CONCURRENCY
+      ) {
+        const batch = recognizedEntries.slice(i, i + S3_UPLOAD_CONCURRENCY);
+        await Promise.all(
+          batch.map(async ({ entry, filename, panNumber }) => {
+            const ext = path.extname(filename);
+            const candidateId = panMap.get(panNumber);
+            try {
+              const buffer = await entry.buffer();
+              const fileId = uuidv4();
+              const s3Key = `Employee_Document/Personal_Documents/PAN_Documents/${fileId}${ext}`;
+              const mimeType =
+                mime.lookup(filename) || "application/octet-stream";
+              const fileSizeBytes = buffer.length;
+
+              const fileUrl = await uploadToS3(buffer, s3Key, mimeType);
+              const presignedUrl = await getPresignedURL(s3Key);
+
+              const fileDetails = {
+                file_id: fileId,
+                file_url: fileUrl,
+                file_path: s3Key,
+                file_name: filename,
+                file_size: fileSizeBytes / 1024,
+                file_size_in_bytes: fileSizeBytes,
+                file_type: mimeType,
+                presigned_url: presignedUrl,
+              };
+
+              if (!filesByCandidateId.has(candidateId))
+                filesByCandidateId.set(candidateId, []);
+              filesByCandidateId.get(candidateId).push(fileDetails);
+              uploaded.push({ file: filename, panNumber, candidateId });
+              console.log(
+                `[pan-zip-upload] uploaded: ${filename} → candidateId:${candidateId}`,
+              );
+            } catch (err) {
+              console.error(
+                `[pan-zip-upload] S3 failed: ${filename} — ${err.message}`,
+              );
+              failed.push({ file: filename, panNumber, reason: err.message });
+            }
+          }),
+        );
+      }
+
+      console.log(
+        `[pan-zip-upload] S3 done — uploaded:${uploaded.length} failed:${failed.length}`,
+      );
+
+      // Bulk DB upsert into both document tables
+      const allCandidateIds = [...filesByCandidateId.keys()];
+      for (const DocModel of [
+        EmployeeOtherDocuments,
+        EmployeeOtherDocumentsProfile,
+      ]) {
+        const existingRecords = await DocModel.findAll({
+          where: {
+            candidate_id: { [Op.in]: allCandidateIds },
+            document_type_id: documentTypeId,
+          },
+          raw: true,
+        });
+        const existingMap = new Map(
+          existingRecords.map((r) => [r.candidate_id, r]),
+        );
+
+        const toCreate = [],
+          toUpdate = [];
+        for (const [candidateId, newFiles] of filesByCandidateId) {
+          const existing = existingMap.get(candidateId);
+          if (existing) {
+            toUpdate.push({
+              id: existing.id,
+              file_url: [
+                ...(Array.isArray(existing.file_url) ? existing.file_url : []),
+                ...newFiles,
+              ],
+            });
+          } else {
+            toCreate.push({
+              candidate_id: candidateId,
+              document_type_id: documentTypeId,
+              file_url: newFiles,
+              created_by: createdBy,
+              updated_by: createdBy,
+              is_completed: false,
+            });
+          }
+        }
+
+        if (toCreate.length > 0) await DocModel.bulkCreate(toCreate);
+        for (const r of toUpdate) {
+          await DocModel.update(
+            { file_url: r.file_url, updated_by: createdBy },
+            { where: { id: r.id } },
+          );
+        }
+      }
+
+      console.log(
+        `[pan-zip-upload] done — uploaded:${uploaded.length} failed:${failed.length} skipped:${skipped.length}`,
+      );
+    })().catch((err) =>
+      console.error("[pan-zip-upload] background error:", err.message),
     );
   },
 );
