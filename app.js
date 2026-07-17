@@ -3277,7 +3277,7 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
         const af =
           Array.isArray(c.additional_form) && c.additional_form.length > 0
             ? c.additional_form
-            : (employeeInfoMap.get(c.id) || []);
+            : employeeInfoMap.get(c.id) || [];
         if (!Array.isArray(af) || af.length === 0) continue;
 
         const form = (id) => af.find((e) => e.id === id);
@@ -3377,7 +3377,12 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
             customFormInserts.push({
               candidate_id: c.id,
               form_id: fid,
-              data: entry.fields.map((f) => ({ type: f.type, label: f.label, value: f.value ?? null, uniqueName: f.uniqueName })),
+              data: entry.fields.map((f) => ({
+                type: f.type,
+                label: f.label,
+                value: f.value ?? null,
+                uniqueName: f.uniqueName,
+              })),
             });
           }
         }
@@ -3420,7 +3425,7 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
         const existingEdu = await EducationDetailsProfile.findAll({
           where: {
             candidate_id: { [Op.in]: ids },
-            education_type_id: [1, 2],
+            education_type_id: [1, 2, 3],
           },
           attributes: ["id", "candidate_id", "education_type_id"],
         });
@@ -3454,9 +3459,14 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
 
       // ── CandidateCustomFormConfig (forms 166, 298, 661) ──────────────────
       if (customFormInserts.length > 0) {
-        const affectedFormIds = [...new Set(customFormInserts.map((r) => r.form_id))];
+        const affectedFormIds = [
+          ...new Set(customFormInserts.map((r) => r.form_id)),
+        ];
         const existingCfg = await CandidateCustomFormConfig.findAll({
-          where: { candidate_id: { [Op.in]: ids }, form_id: { [Op.in]: affectedFormIds } },
+          where: {
+            candidate_id: { [Op.in]: ids },
+            form_id: { [Op.in]: affectedFormIds },
+          },
           attributes: ["id", "candidate_id", "form_id"],
         });
         const existingCfgMap = new Map(
@@ -3480,7 +3490,9 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
         if (cfgInsert.length > 0)
           await CandidateCustomFormConfig.bulkCreate(cfgInsert);
         stats.form661 = cfgInsert.length + cfgUpdated;
-        console.log(`[migrate] customFormConfig inserted:${cfgInsert.length} updated:${cfgUpdated}`);
+        console.log(
+          `[migrate] customFormConfig inserted:${cfgInsert.length} updated:${cfgUpdated}`,
+        );
       }
 
       console.log("[migrate] done —", stats);
