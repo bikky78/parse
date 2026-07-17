@@ -60,6 +60,7 @@ const Employee = sequelize.define(
     designation_id: DataTypes.INTEGER,
     department_id: DataTypes.INTEGER,
     status: DataTypes.STRING,
+    additional_info: DataTypes.ARRAY(DataTypes.JSONB),
   },
   {
     schema: "employee",

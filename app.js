@@ -3189,10 +3189,7 @@ app.post(
 //   form 265 → custom_fields.candidate_custom_form_config (form_id=661)
 // ---------------------------------------------------------------------------
 app.post("/migrate-candidate-form-configs", async (_req, res) => {
-  const CANDIDATE_IDS = [
-    319603, 321528, 323885, 324635, 324996, 326212, 326473, 326682, 328418,
-    330601, 335488, 338907, 340689, 341853,
-  ];
+  const CANDIDATE_IDS = [354296];
 
   const form661Schema = [
     {
@@ -3211,10 +3208,6 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
   const fv = (fields, name) =>
     (fields.find((f) => f.uniqueName === name) || {}).value ?? null;
 
-  res.json({
-    message: "Migration started in background. Check server logs for progress.",
-  });
-
   (async () => {
     try {
       const stats = { aadhar: 0, pan: 0, bank: 0, edu: 0, form661: 0 };
@@ -3227,6 +3220,16 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
       console.log(`[migrate] fetched ${candidates.length} candidates`);
 
       const ids = candidates.map((c) => c.id);
+
+      // Fetch employee records for fallback — some candidates have data in
+      // employee.employee.additional_info instead of candidates.additional_form
+      const employeeRecords = await Employee.findAll({
+        where: { candidate_id: { [Op.in]: ids } },
+        attributes: ["candidate_id", "additional_info"],
+      });
+      const employeeInfoMap = new Map(
+        employeeRecords.map((e) => [e.candidate_id, e.additional_info]),
+      );
 
       // ── helpers ──────────────────────────────────────────────────────────
       // Extract a field value from a form's fields array
@@ -3267,11 +3270,15 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
       const panRows = [];
       const bankRows = [];
       const eduRows = []; // { candidate_id, education_type_id, ... }
-      const form661Inserts = [];
+      const customFormInserts = []; // { candidate_id, form_id, data } for CandidateCustomFormConfig
 
       for (const c of candidates) {
-        const af = c.additional_form;
-        if (!Array.isArray(af)) continue;
+        // Prefer candidates.additional_form; fall back to employee.additional_info
+        const af =
+          Array.isArray(c.additional_form) && c.additional_form.length > 0
+            ? c.additional_form
+            : (employeeInfoMap.get(c.id) || []);
+        if (!Array.isArray(af) || af.length === 0) continue;
 
         const form = (id) => af.find((e) => e.id === id);
 
@@ -3351,7 +3358,8 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
             const fileVal = fv(f100.fields, fileField);
             if (fileVal == null) continue;
             const rawYear = fv(f100.fields, yearField);
-            const yearMatch = rawYear != null ? String(rawYear).match(/\d{4}/) : null;
+            const yearMatch =
+              rawYear != null ? String(rawYear).match(/\d{4}/) : null;
             eduRows.push({
               candidate_id: c.id,
               education_type_id: typeId,
@@ -3362,18 +3370,30 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
           }
         }
 
+        // Forms 133, 166, 199, 298, 365, 562 → CandidateCustomFormConfig (same form_id)
+        for (const fid of [133, 166, 199, 298, 365, 562]) {
+          const entry = form(fid);
+          if (entry?.fields) {
+            customFormInserts.push({
+              candidate_id: c.id,
+              form_id: fid,
+              data: entry.fields.map((f) => ({ type: f.type, label: f.label, value: f.value ?? null, uniqueName: f.uniqueName })),
+            });
+          }
+        }
+
         // Nominee photo (form 265) → CandidateCustomFormConfig form_id=661
-        // const f265 = form(265);
-        // if (f265?.fields) {
-        //   const photoVal = fv(f265.fields, "nominee's_photograph");
-        //   if (photoVal != null) {
-        //     const data = form661Schema.map((s) => ({
-        //       ...s,
-        //       value: s.uniqueName === "nominee's_photograph" ? photoVal : null,
-        //     }));
-        //     form661Inserts.push({ candidate_id: c.id, data });
-        //   }
-        // }
+        const f265 = form(265);
+        if (f265?.fields) {
+          const photoVal = fv(f265.fields, "nominee's_photograph");
+          if (photoVal != null) {
+            const data = form661Schema.map((s) => ({
+              ...s,
+              value: s.uniqueName === "nominee's_photograph" ? photoVal : null,
+            }));
+            customFormInserts.push({ candidate_id: c.id, form_id: 661, data });
+          }
+        }
       }
 
       // ── Upsert aadhar / pan / bank ────────────────────────────────────────
@@ -3400,7 +3420,7 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
         const existingEdu = await EducationDetailsProfile.findAll({
           where: {
             candidate_id: { [Op.in]: ids },
-            education_type_id: [1, 2, 3],
+            education_type_id: [1, 2],
           },
           attributes: ["id", "candidate_id", "education_type_id"],
         });
@@ -3432,46 +3452,46 @@ app.post("/migrate-candidate-form-configs", async (_req, res) => {
         );
       }
 
-      // ── CandidateCustomFormConfig (form 661) ──────────────────────────────
-      // if (form661Inserts.length > 0) {
-      //   const existing661 = await CandidateCustomFormConfig.findAll({
-      //     where: { candidate_id: { [Op.in]: ids }, form_id: 661 },
-      //     attributes: ["id", "candidate_id"],
-      //   });
-      //   const existing661Map = new Map(
-      //     existing661.map((r) => [r.candidate_id, r.id]),
-      //   );
-      //   const cfg661Insert = [];
-      //   let cfg661Updated = 0;
-      //   for (const row of form661Inserts) {
-      //     const existId = existing661Map.get(row.candidate_id);
-      //     if (existId) {
-      //       await CandidateCustomFormConfig.update(
-      //         { data: row.data },
-      //         { where: { id: existId } },
-      //       );
-      //       cfg661Updated++;
-      //     } else {
-      //       cfg661Insert.push({
-      //         candidate_id: row.candidate_id,
-      //         form_id: 661,
-      //         data: row.data,
-      //       });
-      //     }
-      //   }
-      //   if (cfg661Insert.length > 0)
-      //     await CandidateCustomFormConfig.bulkCreate(cfg661Insert);
-      //   stats.form661 = cfg661Insert.length + cfg661Updated;
-      //   console.log(
-      //     `[migrate] form661 inserted:${cfg661Insert.length} updated:${cfg661Updated}`,
-      //   );
-      // }
+      // ── CandidateCustomFormConfig (forms 166, 298, 661) ──────────────────
+      if (customFormInserts.length > 0) {
+        const affectedFormIds = [...new Set(customFormInserts.map((r) => r.form_id))];
+        const existingCfg = await CandidateCustomFormConfig.findAll({
+          where: { candidate_id: { [Op.in]: ids }, form_id: { [Op.in]: affectedFormIds } },
+          attributes: ["id", "candidate_id", "form_id"],
+        });
+        const existingCfgMap = new Map(
+          existingCfg.map((r) => [`${r.candidate_id}_${r.form_id}`, r.id]),
+        );
+        const cfgInsert = [];
+        let cfgUpdated = 0;
+        for (const row of customFormInserts) {
+          const key = `${row.candidate_id}_${row.form_id}`;
+          const existId = existingCfgMap.get(key);
+          if (existId) {
+            await CandidateCustomFormConfig.update(
+              { data: row.data },
+              { where: { id: existId } },
+            );
+            cfgUpdated++;
+          } else {
+            cfgInsert.push(row);
+          }
+        }
+        if (cfgInsert.length > 0)
+          await CandidateCustomFormConfig.bulkCreate(cfgInsert);
+        stats.form661 = cfgInsert.length + cfgUpdated;
+        console.log(`[migrate] customFormConfig inserted:${cfgInsert.length} updated:${cfgUpdated}`);
+      }
 
       console.log("[migrate] done —", stats);
     } catch (err) {
       console.error("[migrate] error:", err.message);
     }
   })();
+
+  res.json({
+    message: "Migration started in background. Check server logs for progress.",
+  });
 });
 
 app.listen(3020, async () => {
