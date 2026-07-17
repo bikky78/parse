@@ -22,6 +22,11 @@ const {
   CandidateCustomFormConfig,
   EmployeeOtherDocuments,
   EmployeeOtherDocumentsProfile,
+  CandidateDetails,
+  AadharMasterProfile,
+  PanMasterProfile,
+  BankMasterProfile,
+  EducationDetailsProfile,
 } = require("./db");
 const { sendTemplatedEmail, sendRawEmail } = require("./email.js");
 const app = express();
@@ -321,18 +326,12 @@ app.post("/invite-user", upload.single("file"), async (req, res) => {
         let sendData = {
           candidate_name: userData.name || "User",
           login_link: "https://hcm.veytan.com/signin-new?",
-          company_name: "IDFC",
+          company_name: "Buzzworks Software Services Pvt Ltd",
         };
 
         // Add timeout for email sending
         await Promise.race([
-          sendTemplatedEmail(
-            userData.email,
-            template,
-            sendData,
-            ["yuvaraj@buzzworks.com"],
-            ["yuvaraj@buzzworks.com"],
-          ),
+          sendTemplatedEmail(userData.email, template, sendData),
           new Promise(
             (_, reject) =>
               setTimeout(
@@ -3179,6 +3178,301 @@ app.post(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// POST /migrate-candidate-form-configs
+// For the 14 hardcoded candidates:
+//   form 34  → cs_in.aadhar_master_profile
+//   form 1   → cs_in.pan_master_profile
+//   form 67  → cs_in.bank_master_profile
+//   form 100 → global.education_details_profile (per education_type_id)
+//   form 265 → custom_fields.candidate_custom_form_config (form_id=661)
+// ---------------------------------------------------------------------------
+app.post("/migrate-candidate-form-configs", async (_req, res) => {
+  const CANDIDATE_IDS = [
+    319603, 321528, 323885, 324635, 324996, 326212, 326473, 326682, 328418,
+    330601, 335488, 338907, 340689, 341853,
+  ];
+
+  const form661Schema = [
+    {
+      type: "singleSelect",
+      label: "Marital Status",
+      uniqueName: "marital_status",
+    },
+    {
+      type: "attachment",
+      label: "Nominee's Photograph",
+      uniqueName: "nominee's_photograph",
+    },
+  ];
+
+  // Helper: get a field value by uniqueName from a fields array
+  const fv = (fields, name) =>
+    (fields.find((f) => f.uniqueName === name) || {}).value ?? null;
+
+  res.json({
+    message: "Migration started in background. Check server logs for progress.",
+  });
+
+  (async () => {
+    try {
+      const stats = { aadhar: 0, pan: 0, bank: 0, edu: 0, form661: 0 };
+
+      // Fetch all 14 candidates at once (small fixed set)
+      const candidates = await CandidateDetails.findAll({
+        where: { id: { [Op.in]: CANDIDATE_IDS } },
+        attributes: ["id", "additional_form"],
+      });
+      console.log(`[migrate] fetched ${candidates.length} candidates`);
+
+      const ids = candidates.map((c) => c.id);
+
+      // ── helpers ──────────────────────────────────────────────────────────
+      // Extract a field value from a form's fields array
+      // Build mapped row from a form's fields using { formUniqueName: dbColumn }
+      const mapFields = (fields, mapping) => {
+        const row = {};
+        for (const [uname, col] of Object.entries(mapping)) {
+          row[col] = fv(fields, uname);
+        }
+        return row;
+      };
+
+      // Generic upsert for a single-record-per-candidate table
+      const upsertProfile = async (Model, rows, lookupCol = "candidate_id") => {
+        if (rows.length === 0) return { inserted: 0, updated: 0 };
+        const existing = await Model.findAll({
+          where: { [lookupCol]: { [Op.in]: rows.map((r) => r[lookupCol]) } },
+          attributes: ["id", lookupCol],
+        });
+        const existingMap = new Map(existing.map((r) => [r[lookupCol], r.id]));
+        const toInsert = [];
+        let updated = 0;
+        for (const row of rows) {
+          const existId = existingMap.get(row[lookupCol]);
+          if (existId) {
+            await Model.update(row, { where: { id: existId } });
+            updated++;
+          } else {
+            toInsert.push(row);
+          }
+        }
+        if (toInsert.length > 0) await Model.bulkCreate(toInsert);
+        return { inserted: toInsert.length, updated };
+      };
+
+      // ── Form 34 → aadhar_master_profile ──────────────────────────────────
+      const aadharRows = [];
+      const panRows = [];
+      const bankRows = [];
+      const eduRows = []; // { candidate_id, education_type_id, ... }
+      const form661Inserts = [];
+
+      for (const c of candidates) {
+        const af = c.additional_form;
+        if (!Array.isArray(af)) continue;
+
+        const form = (id) => af.find((e) => e.id === id);
+
+        // Aadhar (form 34)
+        const f34 = form(34);
+        if (f34?.fields) {
+          aadharRows.push({
+            candidate_id: c.id,
+            ...mapFields(f34.fields, {
+              aadhar_copy: "file_url",
+              aadhar_number: "aadhar_number",
+              name_as_per_aadhar: "name_as_in_aadhar",
+              "father's_name": "guardian_name_as_in_aadhar",
+              date_of_birth_as_per_aadhar: "dob_as_in_aadhar",
+            }),
+          });
+        }
+
+        // PAN (form 1)
+        const f1 = form(1);
+        if (f1?.fields) {
+          panRows.push({
+            candidate_id: c.id,
+            ...mapFields(f1.fields, {
+              pan_upload: "file_url",
+              name_as_per_pan: "name_as_in_pan",
+              "father's_name": "father_name_as_in_pan",
+              pan_number: "pan_number",
+              date_of_birth_as_per_pan: "dob_as_in_pan",
+            }),
+          });
+        }
+
+        // Bank (form 67)
+        const f67 = form(67);
+        if (f67?.fields) {
+          bankRows.push({
+            candidate_id: c.id,
+            ...mapFields(f67.fields, {
+              "passbook/_cancelled_cheque_upload": "file_url",
+              account_holder_name: "account_holder_name",
+              account_number: "bank_account_number",
+              bank_name: "bank_name",
+              branch_name: "bank_branch",
+              ifsc_code: "bank_ifsc_code",
+            }),
+          });
+        }
+
+        // Education (form 100) — one row per education type
+        const f100 = form(100);
+        if (f100?.fields) {
+          const eduTypes = [
+            {
+              typeId: 1,
+              fileField: "10th_marksheet_upload",
+              yearField: "10th_year_of_passing",
+            },
+            {
+              typeId: 2,
+              fileField: "12th_marksheet_upload",
+              yearField: "12th_year_of_passing",
+            },
+            {
+              typeId: 3,
+              fileField: "graduation_upload",
+              yearField: "graduation_year_of_passing",
+              courseField: "degree_name",
+            },
+          ];
+          for (const {
+            typeId,
+            fileField,
+            yearField,
+            courseField,
+          } of eduTypes) {
+            const fileVal = fv(f100.fields, fileField);
+            if (fileVal == null) continue;
+            const rawYear = fv(f100.fields, yearField);
+            const yearMatch = rawYear != null ? String(rawYear).match(/\d{4}/) : null;
+            eduRows.push({
+              candidate_id: c.id,
+              education_type_id: typeId,
+              file_url: fileVal,
+              year_of_passing: yearMatch ? parseInt(yearMatch[0]) : null,
+              course: courseField ? fv(f100.fields, courseField) : null,
+            });
+          }
+        }
+
+        // Nominee photo (form 265) → CandidateCustomFormConfig form_id=661
+        // const f265 = form(265);
+        // if (f265?.fields) {
+        //   const photoVal = fv(f265.fields, "nominee's_photograph");
+        //   if (photoVal != null) {
+        //     const data = form661Schema.map((s) => ({
+        //       ...s,
+        //       value: s.uniqueName === "nominee's_photograph" ? photoVal : null,
+        //     }));
+        //     form661Inserts.push({ candidate_id: c.id, data });
+        //   }
+        // }
+      }
+
+      // ── Upsert aadhar / pan / bank ────────────────────────────────────────
+      const r1 = await upsertProfile(AadharMasterProfile, aadharRows);
+      stats.aadhar = r1.inserted + r1.updated;
+      console.log(
+        `[migrate] aadhar inserted:${r1.inserted} updated:${r1.updated}`,
+      );
+
+      const r2 = await upsertProfile(PanMasterProfile, panRows);
+      stats.pan = r2.inserted + r2.updated;
+      console.log(
+        `[migrate] pan inserted:${r2.inserted} updated:${r2.updated}`,
+      );
+
+      const r3 = await upsertProfile(BankMasterProfile, bankRows);
+      stats.bank = r3.inserted + r3.updated;
+      console.log(
+        `[migrate] bank inserted:${r3.inserted} updated:${r3.updated}`,
+      );
+
+      // ── Education upsert (key: candidate_id + education_type_id) ──────────
+      if (eduRows.length > 0) {
+        const existingEdu = await EducationDetailsProfile.findAll({
+          where: {
+            candidate_id: { [Op.in]: ids },
+            education_type_id: [1, 2, 3],
+          },
+          attributes: ["id", "candidate_id", "education_type_id"],
+        });
+        const eduMap = new Map(
+          existingEdu.map((r) => [
+            `${r.candidate_id}_${r.education_type_id}`,
+            r.id,
+          ]),
+        );
+        const eduInsert = [];
+        let eduUpdated = 0;
+        for (const row of eduRows) {
+          const key = `${row.candidate_id}_${row.education_type_id}`;
+          const existId = eduMap.get(key);
+          if (existId) {
+            await EducationDetailsProfile.update(row, {
+              where: { id: existId },
+            });
+            eduUpdated++;
+          } else {
+            eduInsert.push(row);
+          }
+        }
+        if (eduInsert.length > 0)
+          await EducationDetailsProfile.bulkCreate(eduInsert);
+        stats.edu = eduInsert.length + eduUpdated;
+        console.log(
+          `[migrate] edu inserted:${eduInsert.length} updated:${eduUpdated}`,
+        );
+      }
+
+      // ── CandidateCustomFormConfig (form 661) ──────────────────────────────
+      // if (form661Inserts.length > 0) {
+      //   const existing661 = await CandidateCustomFormConfig.findAll({
+      //     where: { candidate_id: { [Op.in]: ids }, form_id: 661 },
+      //     attributes: ["id", "candidate_id"],
+      //   });
+      //   const existing661Map = new Map(
+      //     existing661.map((r) => [r.candidate_id, r.id]),
+      //   );
+      //   const cfg661Insert = [];
+      //   let cfg661Updated = 0;
+      //   for (const row of form661Inserts) {
+      //     const existId = existing661Map.get(row.candidate_id);
+      //     if (existId) {
+      //       await CandidateCustomFormConfig.update(
+      //         { data: row.data },
+      //         { where: { id: existId } },
+      //       );
+      //       cfg661Updated++;
+      //     } else {
+      //       cfg661Insert.push({
+      //         candidate_id: row.candidate_id,
+      //         form_id: 661,
+      //         data: row.data,
+      //       });
+      //     }
+      //   }
+      //   if (cfg661Insert.length > 0)
+      //     await CandidateCustomFormConfig.bulkCreate(cfg661Insert);
+      //   stats.form661 = cfg661Insert.length + cfg661Updated;
+      //   console.log(
+      //     `[migrate] form661 inserted:${cfg661Insert.length} updated:${cfg661Updated}`,
+      //   );
+      // }
+
+      console.log("[migrate] done —", stats);
+    } catch (err) {
+      console.error("[migrate] error:", err.message);
+    }
+  })();
+});
 
 app.listen(3020, async () => {
   try {

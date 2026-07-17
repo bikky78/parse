@@ -807,6 +807,110 @@ const EmployeeOtherDocumentsProfile = sequelize.define(
   },
 );
 
+const AadharMasterProfile = sequelize.define(
+  "AadharMasterProfile",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    candidate_id: { type: DataTypes.INTEGER, allowNull: true },
+    aadhar_number: { type: DataTypes.STRING, allowNull: true },
+    name_as_in_aadhar: { type: DataTypes.STRING, allowNull: true },
+    dob_as_in_aadhar: { type: DataTypes.STRING, allowNull: true },
+    guardian_name_as_in_aadhar: { type: DataTypes.STRING, allowNull: true },
+    file_url: { type: DataTypes.ARRAY(DataTypes.JSONB), allowNull: true },
+    document_type_id: { type: DataTypes.INTEGER, allowNull: true },
+    created_by: { type: DataTypes.INTEGER, allowNull: true },
+    updated_by: { type: DataTypes.INTEGER, allowNull: true },
+  },
+  { tableName: "aadhar_master_profile", schema: "cs_in", timestamps: true },
+);
+
+const PanMasterProfile = sequelize.define(
+  "PanMasterProfile",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    candidate_id: { type: DataTypes.INTEGER, allowNull: true },
+    pan_number: { type: DataTypes.STRING, allowNull: true },
+    name_as_in_pan: { type: DataTypes.STRING, allowNull: true },
+    father_name_as_in_pan: { type: DataTypes.STRING, allowNull: true },
+    dob_as_in_pan: { type: DataTypes.STRING, allowNull: true },
+    file_url: { type: DataTypes.ARRAY(DataTypes.JSONB), allowNull: true },
+    document_type_id: { type: DataTypes.INTEGER, allowNull: true },
+    created_by: { type: DataTypes.INTEGER, allowNull: true },
+    updated_by: { type: DataTypes.INTEGER, allowNull: true },
+  },
+  { tableName: "pan_master_profile", schema: "cs_in", timestamps: true },
+);
+
+const BankMasterProfile = sequelize.define(
+  "BankMasterProfile",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    candidate_id: { type: DataTypes.INTEGER, allowNull: true },
+    bank_account_number: { type: DataTypes.STRING, allowNull: true },
+    account_holder_name: { type: DataTypes.STRING, allowNull: true },
+    bank_ifsc_code: { type: DataTypes.STRING, allowNull: true },
+    bank_name: { type: DataTypes.STRING, allowNull: true },
+    bank_branch: { type: DataTypes.STRING, allowNull: true },
+    file_url: { type: DataTypes.ARRAY(DataTypes.JSONB), allowNull: true },
+    document_type_id: { type: DataTypes.INTEGER, allowNull: true },
+    created_by: { type: DataTypes.INTEGER, allowNull: true },
+    updated_by: { type: DataTypes.INTEGER, allowNull: true },
+  },
+  { tableName: "bank_master_profile", schema: "cs_in", timestamps: true },
+);
+
+const EducationDetailsProfile = sequelize.define(
+  "EducationDetailsProfile",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    candidate_id: { type: DataTypes.INTEGER, allowNull: true },
+    education_type_id: { type: DataTypes.INTEGER, allowNull: true },
+    file_url: { type: DataTypes.ARRAY(DataTypes.JSONB), allowNull: true },
+    year_of_passing: { type: DataTypes.INTEGER, allowNull: true },
+    course: { type: DataTypes.STRING, allowNull: true },
+    school_name: { type: DataTypes.STRING, allowNull: true },
+    board: { type: DataTypes.STRING, allowNull: true },
+    created_by: { type: DataTypes.INTEGER, allowNull: true },
+    updated_by: { type: DataTypes.INTEGER, allowNull: true },
+  },
+  { tableName: "education_details_profile", schema: "global", timestamps: true },
+);
+
+const CandidateDetails = sequelize.define(
+  "CandidateDetails",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    first_name: { type: DataTypes.STRING, allowNull: true },
+    last_name: { type: DataTypes.STRING, allowNull: true },
+    corporation_id: { type: DataTypes.INTEGER, allowNull: true },
+    additional_form: { type: DataTypes.ARRAY(DataTypes.JSONB), allowNull: true },
+  },
+  {
+    tableName: "candidates",
+    schema: "masters",
+    timestamps: true,
+  },
+);
+
+const FormMaster = sequelize.define(
+  "FormMaster",
+  {
+    id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    heading: { type: DataTypes.STRING, allowNull: true },
+    sub_heading: { type: DataTypes.STRING, allowNull: true },
+    fields: { type: DataTypes.JSONB, allowNull: true },
+    is_disabled: { type: DataTypes.BOOLEAN, allowNull: true },
+    corporation_id: { type: DataTypes.INTEGER, allowNull: true },
+    created_by: { type: DataTypes.INTEGER, allowNull: true },
+    updated_by: { type: DataTypes.INTEGER, allowNull: true },
+  },
+  {
+    tableName: "form_master",
+    schema: "custom_fields",
+    timestamps: true,
+  },
+);
+
 module.exports = {
   sequelize,
   User,
@@ -825,4 +929,10 @@ module.exports = {
   DesignationMaster,
   EmployeeOtherDocuments,
   EmployeeOtherDocumentsProfile,
+  FormMaster,
+  CandidateDetails,
+  AadharMasterProfile,
+  PanMasterProfile,
+  BankMasterProfile,
+  EducationDetailsProfile,
 };
