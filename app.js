@@ -326,12 +326,14 @@ app.post("/invite-user", upload.single("file"), async (req, res) => {
         let sendData = {
           candidate_name: userData.name || "User",
           login_link: "https://hcm.veytan.com/signin-new?",
-          company_name: "Buzzworks Software Services Pvt Ltd",
+          company_name: "Desiderata",
         };
 
         // Add timeout for email sending
         await Promise.race([
-          sendTemplatedEmail(userData.email, template, sendData),
+          sendTemplatedEmail(userData.email, template, sendData, [
+            "mansoor.shaik@buzzworks.com",
+          ]),
           new Promise(
             (_, reject) =>
               setTimeout(
