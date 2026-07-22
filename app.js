@@ -684,7 +684,7 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     const emailLogs = await EmailLogs.findAll({
       where: {
-        email_template: EmailTemplate.ADDRESS_REMINDER,
+        email_template: EmailTemplate.TASK_ASSIGNED_INVITATION_TO_EMPLOYEE,
         sent_at: today,
       },
       attributes: ["employee_id"],
@@ -722,7 +722,7 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
           taskMap.get(emp.candidate_id) || [],
         );
 
-        let newTasksToAssign = tasksToAssign.filter((t) => t.id === 736);
+        let newTasksToAssign = tasksToAssign.filter((t) => t.id === 781);
 
         if (tasksToAssign.length === 0) return;
 
@@ -743,11 +743,11 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
               bulkInsertTasks.push({
                 task_id: task.id,
                 assigned_to: emp.candidate_id,
-                due_date: "2026-05-31",
+                due_date: "2026-07-31",
               });
               taskTemplate.push({
                 name: task.name,
-                due_date: "2026-05-31",
+                due_date: "2026-07-31",
               });
             }
           }
