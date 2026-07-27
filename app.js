@@ -650,7 +650,7 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
       }
       taskMap.get(task.assigned_to).push(task.task_id);
     }
-    const BATCH_SIZE = 1000;
+    const BATCH_SIZE = 500;
 
     const allOnboardingTasks = await TaskMasterOnboarding.findAll({
       where: {
@@ -722,7 +722,9 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
           taskMap.get(emp.candidate_id) || [],
         );
 
-        let newTasksToAssign = tasksToAssign.filter((t) => t.id === 781);
+        let newTasksToAssign = tasksToAssign.filter(
+          (t) => [784].includes(t.id) && !alreadyAssignedTasks.has(t.id),
+        );
 
         if (tasksToAssign.length === 0) return;
 
@@ -743,11 +745,11 @@ app.post("/task_assign", upload.single("file"), async (req, res) => {
               bulkInsertTasks.push({
                 task_id: task.id,
                 assigned_to: emp.candidate_id,
-                due_date: "2026-07-31",
+                due_date: "2026-08-10",
               });
               taskTemplate.push({
                 name: task.name,
-                due_date: "2026-07-31",
+                due_date: "2026-08-10",
               });
             }
           }
